@@ -21,22 +21,26 @@
       <div>
         <p class="eyebrow mb-2">Local infrastructure intelligence</p>
         <h1>Know what is working, what is failing, and where to act first.</h1>
+        <p class="hero-copy">A live operating picture for councils, NGOs, telecoms, utilities, and infrastructure teams working across Cameroon.</p>
       </div>
       <div id="data-status" aria-live="polite"></div>
     </section>
 
-    <section class="tabbar surface mb-4">
-      <button class="tab-button active" data-view="overview">Overview</button>
-      <button class="tab-button" data-view="areas">Area Matrix</button>
-      <button class="tab-button" data-view="profile">Area Profile</button>
-      <button class="tab-button" data-view="assets">Assets</button>
-      <button class="tab-button" data-view="reports">Field Reports</button>
-      <button class="tab-button" data-view="alerts">Alerts</button>
-      <button class="tab-button" data-view="priority">Priority Zones</button>
-      <button class="tab-button" data-view="iot">IoT Signals</button>
-      <button class="tab-button" data-view="decision">Decision Report</button>
-    </section>
+    <div class="app-layout">
+      <aside class="tabbar surface" aria-label="Product navigation">
+        <p class="nav-label">Workspace</p>
+        <button class="tab-button active" data-view="overview"><span>01</span>Overview</button>
+        <button class="tab-button" data-view="areas"><span>02</span>Area Matrix</button>
+        <button class="tab-button" data-view="profile"><span>03</span>Area Profile</button>
+        <button class="tab-button" data-view="assets"><span>04</span>Assets</button>
+        <button class="tab-button" data-view="reports"><span>05</span>Field Reports</button>
+        <button class="tab-button" data-view="alerts"><span>06</span>Alerts</button>
+        <button class="tab-button" data-view="priority"><span>07</span>Priority Zones</button>
+        <button class="tab-button" data-view="iot"><span>08</span>IoT Signals</button>
+        <button class="tab-button" data-view="decision"><span>09</span>Decision Report</button>
+      </aside>
 
+      <div class="content-stage">
     <section class="view-section active" id="view-overview">
       <div class="workspace-grid mb-4">
         <div class="surface map-surface">
@@ -256,6 +260,8 @@
         <div id="decision-report" class="report-panel"></div>
       </div>
     </section>
+      </div>
+    </div>
   </main>
 
   <footer class="text-center py-3 text-muted">

@@ -310,6 +310,14 @@ body {
   margin-bottom: 0.85rem;
 }
 
+.export-actions,
+.ticket-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
 .surface-header h2 {
   font-size: 1.08rem;
   font-weight: 840;

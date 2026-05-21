@@ -222,6 +222,8 @@ struct DecisionReport {
     open_alerts: i64,
     monitored_assets: i64,
     field_reports: i64,
+    active_tickets: i64,
+    overdue_tickets: i64,
     top_priority_zones: Vec<PriorityZone>,
     recommendations: Vec<String>,
 }
@@ -1038,6 +1040,11 @@ fn priority_label(score: f64) -> String {
     }
 }
 
+fn csv_escape(value: &str) -> String {
+    let escaped = value.replace('"', "\"\"");
+    format!("\"{}\"", escaped)
+}
+
 async fn fetch_location_stats(pool: &PgPool) -> Result<Vec<LocationStat>, sqlx::Error> {
     let rows = sqlx::query_as::<_, DbLocation>(
         r#"
@@ -1781,7 +1788,24 @@ async fn decision_report(pool: web::Data<PgPool>) -> impl Responder {
     let assets = fetch_assets(pool.get_ref()).await.unwrap_or_default();
     let alerts = fetch_alerts(pool.get_ref()).await.unwrap_or_default();
     let reports = fetch_reports(pool.get_ref()).await.unwrap_or_default();
+    let tickets = fetch_tickets(pool.get_ref()).await.unwrap_or_default();
     let open_alerts = alerts.iter().filter(|alert| alert.status != "resolved").count() as i64;
+    let active_tickets = tickets
+        .iter()
+        .filter(|ticket| ticket.status != "done" && ticket.status != "cancelled")
+        .count() as i64;
+    let overdue_tickets = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT COUNT(*)
+        FROM maintenance_tickets
+        WHERE status NOT IN ('done', 'cancelled')
+          AND due_date < CURRENT_DATE
+        "#,
+    )
+    .fetch_one(pool.get_ref())
+    .await
+    .map(|row| row.0)
+    .unwrap_or(0);
 
     HttpResponse::Ok().json(DecisionReport {
         generated_for: "InfraPulse Cameroon MVP".into(),
@@ -1789,6 +1813,8 @@ async fn decision_report(pool: web::Data<PgPool>) -> impl Responder {
         open_alerts,
         monitored_assets: assets.len() as i64,
         field_reports: reports.len() as i64,
+        active_tickets,
+        overdue_tickets,
         top_priority_zones: report_priority_zones,
         recommendations: vec![
             "Start with monitored water and solar assets in high-priority arrondissements.".into(),
@@ -1797,6 +1823,107 @@ async fn decision_report(pool: web::Data<PgPool>) -> impl Responder {
             "Package monthly council/NGO reports around uptime, response time, and beneficiary reach.".into(),
         ],
     })
+}
+
+#[get("/api/export/assets.csv")]
+async fn export_assets(pool: web::Data<PgPool>) -> impl Responder {
+    let assets = match fetch_assets(pool.get_ref()).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to export assets: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let mut csv = String::from("id,type,name,region,department,commune,latitude,longitude,status,operator,installed_at,last_checked_at,notes\n");
+    for asset in assets {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            asset.id,
+            csv_escape(&asset.asset_type),
+            csv_escape(&asset.name),
+            csv_escape(&asset.region),
+            csv_escape(&asset.department),
+            csv_escape(&asset.commune),
+            asset.latitude,
+            asset.longitude,
+            csv_escape(&asset.status),
+            csv_escape(asset.operator.as_deref().unwrap_or("")),
+            csv_escape(asset.installed_at.as_deref().unwrap_or("")),
+            csv_escape(asset.last_checked_at.as_deref().unwrap_or("")),
+            csv_escape(asset.notes.as_deref().unwrap_or(""))
+        ));
+    }
+    HttpResponse::Ok()
+        .append_header(("Content-Type", "text/csv; charset=utf-8"))
+        .append_header(("Content-Disposition", "attachment; filename=\"infrapulse-assets.csv\""))
+        .body(csv)
+}
+
+#[get("/api/export/tickets.csv")]
+async fn export_tickets(pool: web::Data<PgPool>) -> impl Responder {
+    let tickets = match fetch_tickets(pool.get_ref()).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to export tickets: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let mut csv = String::from("id,asset_id,alert_id,title,priority,status,assigned_to,due_date,resolution_notes,created_at,updated_at\n");
+    for ticket in tickets {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{}\n",
+            ticket.id,
+            ticket.asset_id.map(|value| value.to_string()).unwrap_or_default(),
+            ticket.alert_id.map(|value| value.to_string()).unwrap_or_default(),
+            csv_escape(&ticket.title),
+            csv_escape(&ticket.priority),
+            csv_escape(&ticket.status),
+            csv_escape(ticket.assigned_to.as_deref().unwrap_or("")),
+            csv_escape(ticket.due_date.as_deref().unwrap_or("")),
+            csv_escape(ticket.resolution_notes.as_deref().unwrap_or("")),
+            csv_escape(&ticket.created_at),
+            csv_escape(&ticket.updated_at)
+        ));
+    }
+    HttpResponse::Ok()
+        .append_header(("Content-Type", "text/csv; charset=utf-8"))
+        .append_header(("Content-Disposition", "attachment; filename=\"infrapulse-tickets.csv\""))
+        .body(csv)
+}
+
+#[get("/api/export/priority-zones.csv")]
+async fn export_priority_zones(pool: web::Data<PgPool>) -> impl Responder {
+    let zones = match build_priority_zones(pool.get_ref()).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to export priority zones: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let mut csv = String::from("pcode,region,department,commune,latitude,longitude,population,phone_rate,confidence,asset_count,open_alert_count,report_count,priority_score,priority_label\n");
+    for zone in zones {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            csv_escape(zone.pcode.as_deref().unwrap_or("")),
+            csv_escape(&zone.region),
+            csv_escape(&zone.department),
+            csv_escape(&zone.commune),
+            zone.latitude,
+            zone.longitude,
+            zone.population,
+            zone.phone_rate,
+            zone.confidence,
+            zone.asset_count,
+            zone.open_alert_count,
+            zone.report_count,
+            zone.priority_score,
+            csv_escape(&zone.priority_label)
+        ));
+    }
+    HttpResponse::Ok()
+        .append_header(("Content-Type", "text/csv; charset=utf-8"))
+        .append_header(("Content-Disposition", "attachment; filename=\"infrapulse-priority-zones.csv\""))
+        .body(csv)
 }
 
 #[actix_web::main]
@@ -1857,6 +1984,9 @@ async fn main() -> std::io::Result<()> {
             .service(create_iot_reading)
             .service(priority_zones)
             .service(decision_report)
+            .service(export_assets)
+            .service(export_tickets)
+            .service(export_priority_zones)
             .service(Files::new("/static", "static").show_files_listing())
             .default_service(web::get().to(|| async {
                 HttpResponse::Found()

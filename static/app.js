@@ -358,17 +358,24 @@ function renderTickets() {
         <strong>${escapeHtml(ticket.title)}</strong>
         <span>Ticket #${ticket.id} &middot; ${escapeHtml(ticket.status)} &middot; ${escapeHtml(ticket.assigned_to || 'Unassigned')}</span>
       </div>
-      <button class="btn btn-sm btn-outline-secondary advance-ticket" data-id="${ticket.id}">In progress</button>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary ticket-status-action" data-id="${ticket.id}" data-status="in_progress">Start</button>
+        <button class="btn btn-sm btn-outline-secondary ticket-status-action" data-id="${ticket.id}" data-status="blocked">Block</button>
+        <button class="btn btn-sm btn-success ticket-status-action" data-id="${ticket.id}" data-status="done">Done</button>
+      </div>
       <p>Priority ${escapeHtml(ticket.priority)} &middot; Asset ${escapeHtml(ticket.asset_id || 'n/a')} &middot; Alert ${escapeHtml(ticket.alert_id || 'n/a')} &middot; Due ${escapeHtml(ticket.due_date || 'not set')}</p>
     </article>
   `).join('');
 
-  document.querySelectorAll('.advance-ticket').forEach(button => {
+  document.querySelectorAll('.ticket-status-action').forEach(button => {
     button.addEventListener('click', async () => {
       tickets = await fetchJson(`/api/tickets/${button.dataset.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'in_progress', resolution_notes: null }),
+        body: JSON.stringify({
+          status: button.dataset.status,
+          resolution_notes: button.dataset.status === 'done' ? 'Marked complete from the operations console.' : null,
+        }),
       });
       renderTickets();
       renderOverviewTickets();
@@ -423,7 +430,8 @@ function renderDecision(report) {
     <div class="profile-grid-inner">
       <div class="metric-tile accent-blue"><span>Monitored assets</span><strong>${report.monitored_assets}</strong><small>${report.open_alerts} open alerts</small></div>
       <div class="metric-tile accent-green"><span>Field reports</span><strong>${report.field_reports}</strong><small>Ground-truth submissions</small></div>
-      <div class="metric-tile accent-gold"><span>Top zones</span><strong>${report.top_priority_zones.length}</strong><small>Ranked for action</small></div>
+      <div class="metric-tile accent-gold"><span>Active tickets</span><strong>${report.active_tickets}</strong><small>${report.overdue_tickets} overdue</small></div>
+      <div class="metric-tile accent-red"><span>Top zones</span><strong>${report.top_priority_zones.length}</strong><small>Ranked for action</small></div>
     </div>
     <h3 class="mt-4">Recommended execution</h3>
     <ul>${report.recommendations.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>

@@ -666,31 +666,56 @@ body {
 
 .table-responsive {
   max-height: 760px;
+  overflow: auto;
+  width: 100%;
 }
 
 .table {
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.91rem;
+  min-width: 1040px;
+  width: 100%;
 }
 
 .table thead th {
-  background: #f1f5f9;
-  color: #475569;
+  background: #fff7df;
+  border-bottom: 1px solid var(--line);
+  color: #6f4d13;
   font-size: 0.74rem;
   letter-spacing: 0.06em;
+  padding: 0.75rem;
   position: sticky;
   text-transform: uppercase;
   top: 0;
   z-index: 1;
 }
 
+.table tbody td {
+  border-bottom: 1px solid #eee7db;
+  color: #253246;
+  padding: 0.78rem 0.75rem;
+  vertical-align: middle;
+}
+
 .ownership-progress {
-  background: #dbe4ed;
-  height: 1rem;
-  min-width: 7rem;
+  background: #e9e1d3;
+  border-radius: 999px;
+  height: 1.15rem;
+  min-width: 8rem;
+  overflow: hidden;
 }
 
 .progress-bar {
+  align-items: center;
   background: var(--teal);
+  color: #fff;
+  display: flex;
+  font-size: 0.72rem;
+  font-weight: 800;
+  height: 100%;
+  justify-content: center;
+  min-width: 2.6rem;
 }
 
 .editor-grid {
@@ -884,6 +909,78 @@ td code {
 
   #map {
     min-height: 470px;
+  }
+
+  .table-responsive {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .table {
+    border-spacing: 0;
+    min-width: 0;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table tbody {
+    display: grid;
+    gap: 0.85rem;
+  }
+
+  .table tr {
+    background: rgba(255, 253, 248, 0.96);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 14px 32px rgba(17, 24, 39, 0.07);
+    overflow: hidden;
+    padding: 0.35rem 0;
+  }
+
+  .table td {
+    align-items: center;
+    border-bottom: 1px solid #eee7db;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    padding: 0.62rem 0.8rem;
+    text-align: right;
+  }
+
+  .table td:last-child {
+    border-bottom: 0;
+  }
+
+  .table td::before {
+    color: #6f4d13;
+    content: attr(data-label);
+    flex: 0 0 44%;
+    font-size: 0.72rem;
+    font-weight: 850;
+    letter-spacing: 0.06em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .table td code {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .ownership-progress {
+    min-width: 9rem;
+    width: min(100%, 12rem);
   }
 }
 

@@ -190,15 +190,15 @@ function renderRegions(regions) {
     const width = Math.min(Math.max(area.phone_rate, 0), 100);
     return `
       <tr class="matrix-row" data-key="${escapeHtml(areaKey(area))}">
-        <td><code>${escapeHtml(area.pcode || 'Manual')}</code></td>
-        <td>${escapeHtml(area.region)}</td>
-        <td>${escapeHtml(area.department)}</td>
-        <td>${escapeHtml(area.commune)}</td>
-        <td><code>${gpsLabel(area)}</code></td>
-        <td>${formatNumber(area.phone_owners)}</td>
-        <td>${formatNumber(area.population)}</td>
-        <td><div class="progress ownership-progress"><div class="progress-bar" style="width:${width.toFixed(1)}%">${formatRate(area.phone_rate)}</div></div></td>
-        <td><span class="confidence-pill">${Math.round(area.confidence * 100)}%</span></td>
+        <td data-label="P-code"><code>${escapeHtml(area.pcode || 'Manual')}</code></td>
+        <td data-label="Region">${escapeHtml(area.region)}</td>
+        <td data-label="Department">${escapeHtml(area.department)}</td>
+        <td data-label="Arrondissement">${escapeHtml(area.commune)}</td>
+        <td data-label="GPS"><code>${gpsLabel(area)}</code></td>
+        <td data-label="Phone owners">${formatNumber(area.phone_owners)}</td>
+        <td data-label="Population">${formatNumber(area.population)}</td>
+        <td data-label="Ownership rate"><div class="progress ownership-progress"><div class="progress-bar" style="width:${width.toFixed(1)}%">${formatRate(area.phone_rate)}</div></div></td>
+        <td data-label="Confidence"><span class="confidence-pill">${Math.round(area.confidence * 100)}%</span></td>
       </tr>
     `;
   }).join('');

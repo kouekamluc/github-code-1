@@ -65,7 +65,9 @@ The frontend is served from `static/index.html` and uses `static/app.js` to disp
 - The backend seeds Cameroon administrative data automatically from `data/cameroon_admin3_seed.tsv`.
 - The seed covers 10 regions, 58 departments, and 360 commune/arrondissement-level administrative units.
 - Administrative names, p-codes, areas, and GPS centroids come from OCHA COD-AB Cameroon, sourced from Institut National de Cartographie (INC), reviewed 30 October 2025, valid from 04 January 2019.
-- Phone ownership and population metrics are nullable until a trusted source or manual update provides them.
+- Phone ownership and population metrics are calculated by a transparent matrix when measured local values are missing.
+- The matrix uses the OCHA GPS centroid and area, region-level weighting, proximity to major urban anchors, 2025 Cameroon population, and the 2024 World Bank mobile-subscription baseline.
+- Manual measured updates override matrix estimates for the matching administrative unit.
 - Docker Desktop must be running before `docker compose up -d` will work on Windows.
 
 ## Production readiness checklist

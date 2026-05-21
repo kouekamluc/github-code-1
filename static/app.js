@@ -87,37 +87,26 @@ async function fetchStats() {
 }
 
 function renderSummary(summary) {
-  const ownershipRate = summary.percent_with_phone === null || summary.percent_with_phone === undefined
-    ? 'No data'
-    : `${summary.percent_with_phone.toFixed(1)}%`;
-
   summaryCards.innerHTML = `
-    <div class="col-md-4 mb-3">
-      <div class="card border-primary">
-        <div class="card-body text-center">
-          <h5 class="card-subtitle mb-2 text-muted">Phone owners</h5>
-          <p class="display-6 mb-0">${formatNumber(summary.total_phone_owners)}</p>
-          <small class="text-muted">${summary.phone_data_count} locations with phone metrics</small>
-        </div>
-      </div>
+    <div class="metric-tile accent-blue">
+      <span>Phone owners</span>
+      <strong>${formatNumber(summary.total_phone_owners)}</strong>
+      <small>${summary.estimated_location_count} matrix-estimated units</small>
     </div>
-    <div class="col-md-4 mb-3">
-      <div class="card border-success">
-        <div class="card-body text-center">
-          <h5 class="card-subtitle mb-2 text-muted">Total population</h5>
-          <p class="display-6 mb-0">${formatNumber(summary.total_population)}</p>
-          <small class="text-muted">${summary.commune_count} communes / arrondissements</small>
-        </div>
-      </div>
+    <div class="metric-tile accent-green">
+      <span>Total population</span>
+      <strong>${formatNumber(summary.total_population)}</strong>
+      <small>${summary.commune_count} arrondissements</small>
     </div>
-    <div class="col-md-4 mb-3">
-      <div class="card border-warning">
-        <div class="card-body text-center">
-          <h5 class="card-subtitle mb-2 text-muted">Ownership rate</h5>
-          <p class="display-6 mb-0">${ownershipRate}</p>
-          <small class="text-muted">${summary.region_count} regions / ${summary.department_count} departments</small>
-        </div>
-      </div>
+    <div class="metric-tile accent-gold">
+      <span>Ownership rate</span>
+      <strong>${summary.percent_with_phone.toFixed(1)}%</strong>
+      <small>${summary.measured_location_count} measured overrides</small>
+    </div>
+    <div class="metric-tile accent-red">
+      <span>Administrative reach</span>
+      <strong>${summary.department_count}</strong>
+      <small>${summary.region_count} regions mapped</small>
     </div>
   `;
 }
@@ -126,7 +115,7 @@ function renderRegions(regions) {
   if (!regions.length) {
     tableBody.innerHTML = `
       <tr>
-        <td colspan="8" class="text-center text-muted py-4">No locations match the selected filters.</td>
+        <td colspan="10" class="text-center text-muted py-4">No locations match the selected filters.</td>
       </tr>
     `;
     return;
@@ -147,6 +136,7 @@ function renderRegions(regions) {
           `;
       return `
         <tr>
+          <td><code>${escapeHtml(region.pcode || 'Manual')}</code></td>
           <td>${escapeHtml(region.region)}</td>
           <td>${escapeHtml(region.department)}</td>
           <td>${escapeHtml(region.commune)}</td>
@@ -155,6 +145,7 @@ function renderRegions(regions) {
           <td>${formatNumber(region.phone_owners)}</td>
           <td>${formatNumber(region.population)}</td>
           <td>${rateCell}</td>
+          <td><span class="confidence-pill">${Math.round(region.confidence * 100)}%</span></td>
         </tr>
       `;
     })
@@ -226,7 +217,7 @@ function updateMapMarkers(stats) {
     const rate = stat.phone_rate ?? 0;
     const marker = L.circleMarker([stat.latitude, stat.longitude], {
       radius: Math.max(7, Math.min(16, rate / 7)),
-      fillColor: rate >= 75 ? '#198754' : '#0d6efd',
+      fillColor: rate >= 78 ? '#16a34a' : rate >= 64 ? '#2563eb' : '#dc2626',
       color: '#fff',
       weight: 2,
       opacity: 1,
@@ -241,7 +232,9 @@ function updateMapMarkers(stats) {
       Area: ${stat.area_sqkm ? `${Number(stat.area_sqkm).toLocaleString()} km²` : 'Unknown'}<br />
       Owners: ${formatNumber(stat.phone_owners)}<br />
       Population: ${formatNumber(stat.population)}<br />
-      Rate: ${formatRate(stat.phone_rate)}
+      Rate: ${formatRate(stat.phone_rate)}<br />
+      Confidence: ${Math.round(stat.confidence * 100)}%<br />
+      Source: ${escapeHtml(stat.metric_source)}
     `);
     marker.addTo(markersLayer);
     bounds.push([stat.latitude, stat.longitude]);
@@ -252,7 +245,7 @@ function updateMapMarkers(stats) {
 
 async function refreshData() {
   refreshButton.disabled = true;
-  setDataStatus('Loading OCHA COD-AB administrative GPS data...', 'info');
+  setDataStatus('Loading GPS matrix...', 'info');
 
   try {
     const [summary, stats] = await Promise.all([fetchSummary(), fetchStats()]);
@@ -260,7 +253,7 @@ async function refreshData() {
     renderSummary(summary);
     buildFilterOptions();
     updateView();
-    setDataStatus(`${stats.length} communes / arrondissements loaded from OCHA COD-AB.`, 'success');
+    setDataStatus(`${stats.length} arrondissements modeled with GPS, area, and national telecom baselines.`, 'success');
   } catch (error) {
     console.error('Unable to fetch data', error);
     setDataStatus(error.message || 'Unable to fetch data from the local API.', 'danger');
@@ -286,6 +279,7 @@ function initMap() {
 
 function buildFormPayload() {
   return {
+    pcode: document.getElementById('pcode').value.trim() || null,
     region: document.getElementById('region').value.trim(),
     department: document.getElementById('department').value.trim(),
     commune: document.getElementById('commune').value.trim(),
@@ -358,7 +352,7 @@ updateForm.addEventListener('submit', async event => {
     buildFilterOptions();
     updateView();
     renderSummary(await fetchSummary());
-    setDataStatus(`${allStats.length} communes / arrondissements loaded from OCHA COD-AB.`, 'success');
+    setDataStatus(`${allStats.length} arrondissements modeled with GPS, area, and national telecom baselines.`, 'success');
     setUpdateStatus('Location data updated successfully.', 'success');
     updateForm.reset();
   } catch (error) {

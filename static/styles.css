@@ -1,0 +1,33 @@
+:root {
+  color-scheme: light;
+}
+body {
+  background: #f8f9fa;
+  font-family: Inter, system-ui, sans-serif;
+}
+.navbar {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+.summary-panel {
+  min-height: 640px;
+}
+.card-title {
+  font-weight: 600;
+}
+#summary-cards .card {
+  min-height: 120px;
+}
+#update-status {
+  min-height: 1.25rem;
+}
+#map {
+  min-height: 420px;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+.leaflet-container {
+  border-radius: 0.75rem;
+}
+.table-responsive {
+  max-height: 620px;
+}

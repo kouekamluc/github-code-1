@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cameroon Mobile Phone Monitor</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">Cameroon Phone Monitor</a>
+      <span class="navbar-text">Real-time mobile phone ownership dashboard</span>
+    </div>
+  </nav>
+
+  <main class="container py-4">
+    <section class="mb-5">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h2 class="card-title">Map and hierarchy</h2>
+          <div class="row g-3 mb-3">
+            <div class="col-md-4">
+              <label class="form-label" for="regionFilter">Region</label>
+              <select id="regionFilter" class="form-select" data-label="regions"></select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label" for="departmentFilter">Department</label>
+              <select id="departmentFilter" class="form-select" data-label="departments"></select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label" for="communeFilter">Commune</label>
+              <select id="communeFilter" class="form-select" data-label="communes"></select>
+            </div>
+          </div>
+          <div id="map"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mb-5">
+      <div class="row g-4">
+        <div class="col-lg-8">
+          <div class="card shadow-sm">
+            <div class="card-body">
+              <h2 class="card-title">National summary</h2>
+              <div class="row text-center" id="summary-cards"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-4">
+          <div class="card shadow-sm summary-panel">
+            <div class="card-body">
+              <h3 class="card-title">Update location data</h3>
+              <form id="update-form">
+                <div class="mb-3">
+                  <label for="region" class="form-label">Region</label>
+                  <input type="text" class="form-control" id="region" placeholder="e.g. Centre" required />
+                </div>
+                <div class="mb-3">
+                  <label for="department" class="form-label">Department</label>
+                  <input type="text" class="form-control" id="department" placeholder="e.g. Mefou-et-Afamba" required />
+                </div>
+                <div class="mb-3">
+                  <label for="commune" class="form-label">Commune</label>
+                  <input type="text" class="form-control" id="commune" placeholder="e.g. Yaoundé I" required />
+                </div>
+                <div class="mb-3">
+                  <label for="location" class="form-label">Location name</label>
+                  <input type="text" class="form-control" id="location" placeholder="e.g. Yaoundé" required />
+                </div>
+                <div class="row gy-3">
+                  <div class="col-6">
+                    <label for="latitude" class="form-label">Latitude</label>
+                    <input type="number" step="0.0001" class="form-control" id="latitude" placeholder="3.8480" required />
+                  </div>
+                  <div class="col-6">
+                    <label for="longitude" class="form-label">Longitude</label>
+                    <input type="number" step="0.0001" class="form-control" id="longitude" placeholder="11.5021" required />
+                  </div>
+                </div>
+                <div class="mb-3 mt-3">
+                  <label for="phoneOwners" class="form-label">Phone owners</label>
+                  <input type="number" class="form-control" id="phoneOwners" min="0" required />
+                </div>
+                <div class="mb-3">
+                  <label for="population" class="form-label">Population</label>
+                  <input type="number" class="form-control" id="population" min="0" required />
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Save</button>
+                <div id="update-status" class="mt-3"></div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="card-title">Regional overview</h2>
+            <button class="btn btn-outline-secondary" id="refresh-button">Refresh data</button>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>Region</th>
+                  <th>Department</th>
+                  <th>Commune</th>
+                  <th>Location</th>
+                  <th>Phone owners</th>
+                  <th>Population</th>
+                  <th>Ownership rate</th>
+                </tr>
+              </thead>
+              <tbody id="regions-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="text-center py-3 text-muted">
+    Built with Rust backend, PostgreSQL, and Leaflet for Cameroon mobile monitoring.
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

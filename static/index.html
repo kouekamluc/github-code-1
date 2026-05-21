@@ -14,7 +14,7 @@
         <div class="brand-mark">IP</div>
         <div>
           <strong>InfraPulse</strong>
-          <span>Cameroon</span>
+        <span>Phone + Connectivity</span>
         </div>
       </div>
 
@@ -22,29 +22,29 @@
       <nav class="tabbar">
         <button class="tab-button active" data-view="overview">Overview</button>
         <button class="tab-button" data-view="workspaces">Workspaces</button>
-        <button class="tab-button" data-view="areas">Area Matrix</button>
+        <button class="tab-button" data-view="areas">Phone Matrix</button>
         <button class="tab-button" data-view="profile">Area Profile</button>
-        <button class="tab-button" data-view="assets">Assets</button>
-        <button class="tab-button" data-view="reports">Field Reports</button>
-        <button class="tab-button" data-view="alerts">Alerts</button>
+        <button class="tab-button" data-view="assets">Signal Probes</button>
+        <button class="tab-button" data-view="reports">GPS Surveys</button>
+        <button class="tab-button" data-view="alerts">Coverage Alerts</button>
         <button class="tab-button" data-view="tickets">Maintenance</button>
         <button class="tab-button" data-view="priority">Priority Zones</button>
-        <button class="tab-button" data-view="iot">IoT Signals</button>
+        <button class="tab-button" data-view="iot">Telemetry</button>
         <button class="tab-button" data-view="decision">Decision Report</button>
       </nav>
 
       <div class="sidebar-note">
         <span>Live scope</span>
-        <strong>Water, solar, connectivity, population, and field signals.</strong>
+        <strong>Phone ownership, population, GPS signal, weak coverage, and field validation.</strong>
       </div>
     </aside>
 
     <main class="main-stage">
       <header class="command-header">
         <div>
-          <p class="eyebrow">Local infrastructure intelligence</p>
-          <h1>Cameroon operating picture</h1>
-          <p>See demand, weak coverage, field reports, monitored assets, and priority zones before teams move.</p>
+          <p class="eyebrow">Cameroon connectivity intelligence</p>
+          <h1>Phone ownership and coverage signal map</h1>
+          <p>Estimate who owns phones, where people are concentrated, and which arrondissements need connectivity validation or digital inclusion work.</p>
         </div>
         <div class="header-actions">
           <div id="data-status" aria-live="polite"></div>
@@ -59,8 +59,8 @@
           <section class="surface map-surface">
             <div class="surface-header">
               <div>
-                <p class="eyebrow">GPS signal layer</p>
-                <h2>Infrastructure map</h2>
+                <p class="eyebrow">GPS + ownership layer</p>
+                <h2>Phone access map</h2>
               </div>
             </div>
             <div class="filter-grid">
@@ -84,21 +84,21 @@
             <section class="surface dark-surface">
               <div class="surface-header">
                 <div>
-                  <p class="eyebrow">Action queue</p>
-                  <h2>Open alerts</h2>
+                  <p class="eyebrow">Connectivity gaps</p>
+                  <h2>Underserved zones</h2>
                 </div>
               </div>
-              <div id="overview-alerts" class="compact-stack"></div>
+              <div id="overview-priority" class="compact-stack"></div>
             </section>
 
             <section class="surface">
               <div class="surface-header">
                 <div>
-                  <p class="eyebrow">Maintenance</p>
-                  <h2>Active tickets</h2>
+                  <p class="eyebrow">Ground truth</p>
+                  <h2>Field validation</h2>
                 </div>
               </div>
-              <div id="overview-tickets" class="compact-stack"></div>
+              <div id="overview-alerts" class="compact-stack"></div>
             </section>
           </aside>
         </div>
@@ -186,7 +186,7 @@
         <div class="surface table-surface">
           <div class="surface-header">
             <div>
-              <p class="eyebrow">Administrative matrix</p>
+              <p class="eyebrow">Phone ownership matrix</p>
               <h2>All departments and arrondissements</h2>
             </div>
           </div>
@@ -216,8 +216,8 @@
           <div class="surface">
             <div class="surface-header">
               <div>
-                <p class="eyebrow">Asset registry</p>
-                <h2>Add monitored asset</h2>
+                <p class="eyebrow">Signal probe registry</p>
+                <h2>Add monitored probe or site</h2>
               </div>
             </div>
             <form id="asset-form" novalidate>
@@ -252,8 +252,8 @@
           <div class="surface">
             <div class="surface-header">
               <div>
-                <p class="eyebrow">Monitored portfolio</p>
-                <h2>Assets</h2>
+                <p class="eyebrow">Connectivity portfolio</p>
+                <h2>Signal probes and sites</h2>
               </div>
             </div>
             <div id="assets-list" class="list-stack"></div>
@@ -267,7 +267,7 @@
             <div class="surface-header">
               <div>
                 <p class="eyebrow">Ground truth</p>
-                <h2>Submit field report</h2>
+                <h2>Submit GPS survey</h2>
               </div>
             </div>
             <form id="report-form" novalidate>
@@ -294,8 +294,8 @@
           <div class="surface">
             <div class="surface-header">
               <div>
-                <p class="eyebrow">Recent reports</p>
-                <h2>Field feed</h2>
+                <p class="eyebrow">Recent validation</p>
+                <h2>GPS survey feed</h2>
               </div>
             </div>
             <div id="reports-list" class="list-stack"></div>
@@ -307,8 +307,8 @@
         <div class="surface">
           <div class="surface-header">
             <div>
-              <p class="eyebrow">Operations</p>
-              <h2>Alerts and maintenance triggers</h2>
+              <p class="eyebrow">Coverage operations</p>
+              <h2>Connectivity alerts and validation triggers</h2>
             </div>
           </div>
           <div id="alerts-list" class="list-stack"></div>
@@ -371,7 +371,7 @@
           <div class="surface-header">
             <div>
               <p class="eyebrow">Device telemetry</p>
-              <h2>IoT signal stream</h2>
+              <h2>Probe and GPS signal stream</h2>
             </div>
           </div>
           <div id="iot-list" class="list-stack"></div>

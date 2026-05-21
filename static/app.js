@@ -91,23 +91,23 @@ function switchView(view) {
 
 function renderSummary(summary) {
   summaryCards.innerHTML = `
-    <div class="metric-tile accent-blue">
+    <div class="metric-tile accent-blue featured-metric">
       <span>Estimated phone owners</span>
       <strong>${formatNumber(summary.total_phone_owners)}</strong>
-      <small>Across ${summary.estimated_location_count} modeled arrondissements</small>
+      <small>Modeled across ${summary.estimated_location_count} arrondissements</small>
     </div>
     <div class="metric-tile accent-green">
       <span>Population covered</span>
       <strong>${formatNumber(summary.total_population)}</strong>
-      <small>${summary.commune_count} arrondissements in the matrix</small>
+      <small>${summary.commune_count} arrondissements in the national matrix</small>
     </div>
     <div class="metric-tile accent-gold">
-      <span>National ownership rate</span>
+      <span>Estimated ownership rate</span>
       <strong>${formatRate(summary.percent_with_phone)}</strong>
-      <small>Blended from baseline data and GPS signals</small>
+      <small>Blended from population, GPS, and telecom baselines</small>
     </div>
     <div class="metric-tile accent-red">
-      <span>Departments mapped</span>
+      <span>Departments covered</span>
       <strong>${summary.department_count}</strong>
       <small>${summary.region_count} regions mapped</small>
     </div>
@@ -142,11 +142,11 @@ function renderAreaProfile(area = selectedArea) {
       <div class="metric-tile accent-blue"><span>Population</span><strong>${formatNumber(area.population)}</strong><small>Matrix or measured</small></div>
       <div class="metric-tile accent-green"><span>Phone owners</span><strong>${formatNumber(area.phone_owners)}</strong><small>${formatRate(area.phone_rate)} ownership</small></div>
       <div class="metric-tile accent-gold"><span>Confidence</span><strong>${Math.round(area.confidence * 100)}%</strong><small>${escapeHtml(area.metric_source)}</small></div>
-      <div class="metric-tile accent-red"><span>Ops signal</span><strong>${localAlerts.length}</strong><small>${localAssets.length} assets / ${localReports.length} reports</small></div>
+      <div class="metric-tile accent-red"><span>Validation signal</span><strong>${localAlerts.length}</strong><small>${localAssets.length} probes / ${localReports.length} reports</small></div>
     </div>
     <div class="profile-notes">
       <strong>Recommended action:</strong>
-      ${localPriority?.priority_score >= 52 ? 'Immediate field validation and maintenance review.' : localPriority?.priority_score >= 38 ? 'Schedule survey and monitor assets.' : 'Keep in watchlist and enrich with field data.'}
+      ${localPriority?.priority_score >= 52 ? 'Prioritize connectivity survey and phone ownership validation.' : localPriority?.priority_score >= 38 ? 'Schedule field signal check and enrich with survey data.' : 'Keep in watchlist and refresh when new GPS or survey signals arrive.'}
     </div>
   `;
 }
@@ -374,7 +374,7 @@ function renderOverviewAlerts() {
     <article class="compact-card severity-${escapeHtml(alert.severity)}">
       <div>
         <strong>${escapeHtml(alert.title)}</strong>
-        <span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span>
+        <span>${escapeHtml(alert.severity)} validation signal &middot; ${escapeHtml(alert.status)}</span>
       </div>
       <span class="status-pill">${escapeHtml(alert.severity)}</span>
       <p>${escapeHtml(alert.message)}</p>
@@ -442,7 +442,7 @@ function renderOverviewPriority() {
         <span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)}</span>
       </div>
       <span class="priority-badge priority-${escapeHtml(zone.priority_label.toLowerCase())}">${zone.priority_score.toFixed(0)}</span>
-      <p>${formatNumber(zone.population)} people &middot; ${zone.open_alert_count} alerts &middot; ${formatRate(zone.phone_rate)} phone ownership</p>
+      <p>${formatNumber(zone.population)} people &middot; ${formatRate(zone.phone_rate)} phone ownership &middot; ${Math.round(zone.confidence * 100)}% confidence</p>
     </article>
   `).join('');
 }

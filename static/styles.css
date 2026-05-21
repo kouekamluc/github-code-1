@@ -489,6 +489,24 @@ body {
   color: #92400e;
 }
 
+.priority-urgent,
+.list-card.priority-urgent,
+.compact-card.priority-urgent {
+  border-left-color: var(--red);
+}
+
+.priority-high,
+.list-card.priority-high,
+.compact-card.priority-high {
+  border-left-color: var(--gold);
+}
+
+.priority-medium,
+.list-card.priority-medium,
+.compact-card.priority-medium {
+  border-left-color: var(--blue);
+}
+
 .priority-watch,
 .status-online {
   background: #dcfce7;

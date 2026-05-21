@@ -17,6 +17,7 @@ let allStats = [];
 let assets = [];
 let reports = [];
 let alerts = [];
+let tickets = [];
 let readings = [];
 let priorityZones = [];
 let selectedArea = null;
@@ -350,6 +351,49 @@ function renderOverviewAlerts() {
   `).join('') : '<div class="empty-state">No open alerts.</div>';
 }
 
+function renderTickets() {
+  document.getElementById('tickets-list').innerHTML = tickets.map(ticket => `
+    <article class="list-card priority-${escapeHtml(ticket.priority)}">
+      <div>
+        <strong>${escapeHtml(ticket.title)}</strong>
+        <span>Ticket #${ticket.id} &middot; ${escapeHtml(ticket.status)} &middot; ${escapeHtml(ticket.assigned_to || 'Unassigned')}</span>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary advance-ticket" data-id="${ticket.id}">In progress</button>
+      <p>Priority ${escapeHtml(ticket.priority)} &middot; Asset ${escapeHtml(ticket.asset_id || 'n/a')} &middot; Alert ${escapeHtml(ticket.alert_id || 'n/a')} &middot; Due ${escapeHtml(ticket.due_date || 'not set')}</p>
+    </article>
+  `).join('');
+
+  document.querySelectorAll('.advance-ticket').forEach(button => {
+    button.addEventListener('click', async () => {
+      tickets = await fetchJson(`/api/tickets/${button.dataset.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'in_progress', resolution_notes: null }),
+      });
+      renderTickets();
+      renderOverviewTickets();
+    });
+  });
+
+  renderOverviewTickets();
+}
+
+function renderOverviewTickets() {
+  const target = document.getElementById('overview-tickets');
+  if (!target) return;
+  const activeTickets = tickets.filter(ticket => ticket.status !== 'done').slice(0, 5);
+  target.innerHTML = activeTickets.length ? activeTickets.map(ticket => `
+    <article class="compact-card priority-${escapeHtml(ticket.priority)}">
+      <div>
+        <strong>${escapeHtml(ticket.title)}</strong>
+        <span>${escapeHtml(ticket.assigned_to || 'Unassigned')} &middot; ${escapeHtml(ticket.status)}</span>
+      </div>
+      <span class="priority-badge priority-${escapeHtml(ticket.priority === 'urgent' ? 'high' : ticket.priority)}">${escapeHtml(ticket.priority)}</span>
+      <p>Due ${escapeHtml(ticket.due_date || 'not set')} &middot; Asset ${escapeHtml(ticket.asset_id || 'n/a')}</p>
+    </article>
+  `).join('') : '<div class="empty-state">No active tickets.</div>';
+}
+
 function renderOverviewPriority() {
   const target = document.getElementById('overview-priority');
   if (!target) return;
@@ -413,12 +457,13 @@ async function refreshData() {
   refreshButton.disabled = true;
   setStatus(dataStatus, 'Loading InfraPulse intelligence layers...', 'info');
   try {
-    const [summary, stats, assetData, reportData, alertData, readingData, priorityData, decisionData] = await Promise.all([
+    const [summary, stats, assetData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
       fetchJson('/api/summary'),
       fetchJson('/api/stats'),
       fetchJson('/api/assets'),
       fetchJson('/api/reports'),
       fetchJson('/api/alerts'),
+      fetchJson('/api/tickets'),
       fetchJson('/api/iot/readings'),
       fetchJson('/api/priority-zones'),
       fetchJson('/api/decision-report'),
@@ -427,6 +472,7 @@ async function refreshData() {
     assets = assetData;
     reports = reportData;
     alerts = alertData;
+    tickets = ticketData;
     readings = readingData;
     priorityZones = priorityData;
     renderSummary(summary);
@@ -434,6 +480,7 @@ async function refreshData() {
     renderAssets();
     renderReports();
     renderAlerts();
+    renderTickets();
     renderPriority();
     renderIot();
     renderDecision(decisionData);
@@ -499,6 +546,30 @@ document.getElementById('report-form').addEventListener('submit', async event =>
     event.target.reset();
   } catch (error) {
     setStatus(document.getElementById('report-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('ticket-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const payload = {
+    asset_id: document.getElementById('ticketAssetId').value ? Number(document.getElementById('ticketAssetId').value) : null,
+    alert_id: document.getElementById('ticketAlertId').value ? Number(document.getElementById('ticketAlertId').value) : null,
+    title: document.getElementById('ticketTitle').value.trim(),
+    priority: document.getElementById('ticketPriority').value,
+    assigned_to: document.getElementById('ticketAssignedTo').value.trim() || null,
+    due_date: document.getElementById('ticketDueDate').value || null,
+  };
+  try {
+    tickets = await fetchJson('/api/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    renderTickets();
+    setStatus(document.getElementById('ticket-status'), 'Ticket created.', 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('ticket-status'), error.message, 'danger');
   }
 });
 

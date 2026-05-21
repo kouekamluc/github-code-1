@@ -145,6 +145,37 @@ struct AlertStatusRequest {
 }
 
 #[derive(Serialize, FromRow)]
+struct MaintenanceTicket {
+    id: i64,
+    asset_id: Option<i64>,
+    alert_id: Option<i64>,
+    title: String,
+    priority: String,
+    status: String,
+    assigned_to: Option<String>,
+    due_date: Option<String>,
+    resolution_notes: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct MaintenanceTicketRequest {
+    asset_id: Option<i64>,
+    alert_id: Option<i64>,
+    title: String,
+    priority: String,
+    assigned_to: Option<String>,
+    due_date: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MaintenanceTicketStatusRequest {
+    status: String,
+    resolution_notes: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
 struct IotReading {
     id: i64,
     asset_id: i64,
@@ -420,6 +451,30 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        DO $$
+        BEGIN
+            IF to_regclass('maintenance_tickets') IS NULL
+               AND to_regclass('maintenance_tickets_id_seq') IS NOT NULL THEN
+                DROP SEQUENCE maintenance_tickets_id_seq;
+            END IF;
+        END $$;
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS maintenance_tickets (
+            id BIGSERIAL PRIMARY KEY,
+            asset_id BIGINT REFERENCES infrastructure_assets(id) ON DELETE SET NULL,
+            alert_id BIGINT REFERENCES alerts(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            assigned_to TEXT,
+            due_date DATE,
+            resolution_notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+        r#"
         CREATE TABLE IF NOT EXISTS iot_readings (
             id BIGSERIAL PRIMARY KEY,
             asset_id BIGINT NOT NULL REFERENCES infrastructure_assets(id) ON DELETE CASCADE,
@@ -644,6 +699,39 @@ async fn seed_operational_demo(pool: &PgPool) -> Result<(), sqlx::Error> {
                    'Moungo borehole flow dropped below expected evening demand.', 'open'
             FROM infrastructure_assets
             WHERE name = 'Moungo borehole cluster'
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    let seeded_tickets: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM maintenance_tickets")
+        .fetch_one(pool)
+        .await?;
+    if seeded_tickets.0 == 0 {
+        sqlx::query(
+            r#"
+            INSERT INTO maintenance_tickets (
+                asset_id, alert_id, title, priority, status, assigned_to, due_date
+            )
+            SELECT a.asset_id, a.id, 'Dispatch technician to verify pump telemetry',
+                   'urgent', 'open', 'North field team', CURRENT_DATE + INTERVAL '2 days'
+            FROM alerts a
+            WHERE a.title = 'Pump telemetry offline'
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO maintenance_tickets (
+                asset_id, alert_id, title, priority, status, assigned_to, due_date
+            )
+            SELECT a.asset_id, a.id, 'Inspect borehole flow and evening demand pattern',
+                   'high', 'scheduled', 'Littoral water unit', CURRENT_DATE + INTERVAL '5 days'
+            FROM alerts a
+            WHERE a.title = 'Water flow below baseline'
             "#,
         )
         .execute(pool)
@@ -1091,6 +1179,44 @@ async fn fetch_alerts(pool: &PgPool) -> Result<Vec<Alert>, sqlx::Error> {
     .await
 }
 
+async fn fetch_tickets(pool: &PgPool) -> Result<Vec<MaintenanceTicket>, sqlx::Error> {
+    sqlx::query_as::<_, MaintenanceTicket>(
+        r#"
+        SELECT
+            id,
+            asset_id,
+            alert_id,
+            title,
+            priority,
+            status,
+            assigned_to,
+            due_date::TEXT AS due_date,
+            resolution_notes,
+            created_at::TEXT AS created_at,
+            updated_at::TEXT AS updated_at
+        FROM maintenance_tickets
+        ORDER BY
+            CASE status
+                WHEN 'open' THEN 1
+                WHEN 'scheduled' THEN 2
+                WHEN 'in_progress' THEN 3
+                WHEN 'blocked' THEN 4
+                ELSE 5
+            END,
+            CASE priority
+                WHEN 'urgent' THEN 1
+                WHEN 'high' THEN 2
+                WHEN 'medium' THEN 3
+                ELSE 4
+            END,
+            due_date ASC NULLS LAST,
+            created_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
 async fn fetch_iot_readings(pool: &PgPool) -> Result<Vec<IotReading>, sqlx::Error> {
     sqlx::query_as::<_, IotReading>(
         r#"
@@ -1495,6 +1621,89 @@ async fn update_alert_status(
     }
 }
 
+#[get("/api/tickets")]
+async fn list_tickets(pool: web::Data<PgPool>) -> impl Responder {
+    match fetch_tickets(pool.get_ref()).await {
+        Ok(tickets) => HttpResponse::Ok().json(tickets),
+        Err(err) => {
+            eprintln!("Failed to query tickets: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/tickets")]
+async fn create_ticket(
+    pool: web::Data<PgPool>,
+    payload: web::Json<MaintenanceTicketRequest>,
+) -> impl Responder {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO maintenance_tickets (
+            asset_id, alert_id, title, priority, status, assigned_to, due_date
+        ) VALUES ($1, $2, $3, $4, 'open', $5, $6::DATE)
+        "#,
+    )
+    .bind(payload.asset_id)
+    .bind(payload.alert_id)
+    .bind(&payload.title)
+    .bind(&payload.priority)
+    .bind(&payload.assigned_to)
+    .bind(&payload.due_date)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(_) => match fetch_tickets(pool.get_ref()).await {
+            Ok(tickets) => HttpResponse::Ok().json(tickets),
+            Err(err) => {
+                eprintln!("Failed to return tickets: {}", err);
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        Err(err) => {
+            eprintln!("Failed to create ticket: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[patch("/api/tickets/{id}")]
+async fn update_ticket_status(
+    pool: web::Data<PgPool>,
+    path: web::Path<i64>,
+    payload: web::Json<MaintenanceTicketStatusRequest>,
+) -> impl Responder {
+    let result = sqlx::query(
+        r#"
+        UPDATE maintenance_tickets
+        SET status = $1,
+            resolution_notes = COALESCE($2, resolution_notes),
+            updated_at = NOW()
+        WHERE id = $3
+        "#,
+    )
+    .bind(&payload.status)
+    .bind(&payload.resolution_notes)
+    .bind(*path)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(_) => match fetch_tickets(pool.get_ref()).await {
+            Ok(tickets) => HttpResponse::Ok().json(tickets),
+            Err(err) => {
+                eprintln!("Failed to return tickets: {}", err);
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        Err(err) => {
+            eprintln!("Failed to update ticket: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 #[get("/api/iot/readings")]
 async fn list_iot_readings(pool: web::Data<PgPool>) -> impl Responder {
     match fetch_iot_readings(pool.get_ref()).await {
@@ -1641,6 +1850,9 @@ async fn main() -> std::io::Result<()> {
             .service(list_alerts)
             .service(create_alert)
             .service(update_alert_status)
+            .service(list_tickets)
+            .service(create_ticket)
+            .service(update_ticket_status)
             .service(list_iot_readings)
             .service(create_iot_reading)
             .service(priority_zones)

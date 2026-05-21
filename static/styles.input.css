@@ -405,6 +405,11 @@ body {
   justify-content: flex-end;
 }
 
+.section-divider {
+  border-top: 1px solid var(--line);
+  margin: 1.1rem 0;
+}
+
 .surface-header h2 {
   font-size: 1.08rem;
   font-weight: 840;

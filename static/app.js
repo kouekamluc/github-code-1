@@ -18,6 +18,8 @@ let assets = [];
 let reports = [];
 let alerts = [];
 let tickets = [];
+let organizations = [];
+let projects = [];
 let readings = [];
 let priorityZones = [];
 let selectedArea = null;
@@ -147,6 +149,35 @@ function renderAreaProfile(area = selectedArea) {
       ${localPriority?.priority_score >= 52 ? 'Immediate field validation and maintenance review.' : localPriority?.priority_score >= 38 ? 'Schedule survey and monitor assets.' : 'Keep in watchlist and enrich with field data.'}
     </div>
   `;
+}
+
+function renderWorkspaces() {
+  const orgSelect = document.getElementById('projectOrganization');
+  orgSelect.innerHTML = '<option value="">No organization</option>' + organizations.map(organization => (
+    `<option value="${organization.id}">${escapeHtml(organization.name)}</option>`
+  )).join('');
+
+  document.getElementById('organizations-list').innerHTML = organizations.map(organization => `
+    <article class="list-card">
+      <div>
+        <strong>${escapeHtml(organization.name)}</strong>
+        <span>${escapeHtml(organization.org_type)} &middot; ${escapeHtml(organization.contact_name || 'No contact')}</span>
+      </div>
+      <span class="status-pill">Org #${organization.id}</span>
+      <p>${escapeHtml(organization.contact_email || 'No email recorded')}</p>
+    </article>
+  `).join('');
+
+  document.getElementById('projects-list').innerHTML = projects.map(project => `
+    <article class="list-card status-${escapeHtml(project.status)}">
+      <div>
+        <strong>${escapeHtml(project.name)}</strong>
+        <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(project.sector)}</span>
+      </div>
+      <span class="status-pill">${escapeHtml(project.status)}</span>
+      <p>${escapeHtml(project.region || 'National')} &middot; Starts ${escapeHtml(project.start_date || 'not set')}</p>
+    </article>
+  `).join('');
 }
 
 function renderRegions(regions) {
@@ -465,9 +496,11 @@ async function refreshData() {
   refreshButton.disabled = true;
   setStatus(dataStatus, 'Loading InfraPulse intelligence layers...', 'info');
   try {
-    const [summary, stats, assetData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
+    const [summary, stats, orgData, projectData, assetData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
       fetchJson('/api/summary'),
       fetchJson('/api/stats'),
+      fetchJson('/api/organizations'),
+      fetchJson('/api/projects'),
       fetchJson('/api/assets'),
       fetchJson('/api/reports'),
       fetchJson('/api/alerts'),
@@ -477,6 +510,8 @@ async function refreshData() {
       fetchJson('/api/decision-report'),
     ]);
     allStats = stats;
+    organizations = orgData;
+    projects = projectData;
     assets = assetData;
     reports = reportData;
     alerts = alertData;
@@ -485,6 +520,7 @@ async function refreshData() {
     priorityZones = priorityData;
     renderSummary(summary);
     buildFilterOptions();
+    renderWorkspaces();
     renderAssets();
     renderReports();
     renderAlerts();
@@ -554,6 +590,52 @@ document.getElementById('report-form').addEventListener('submit', async event =>
     event.target.reset();
   } catch (error) {
     setStatus(document.getElementById('report-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('organization-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const payload = {
+    name: document.getElementById('organizationName').value.trim(),
+    org_type: document.getElementById('organizationType').value,
+    contact_name: document.getElementById('organizationContactName').value.trim() || null,
+    contact_email: document.getElementById('organizationContactEmail').value.trim() || null,
+  };
+  try {
+    organizations = await fetchJson('/api/organizations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    renderWorkspaces();
+    setStatus(document.getElementById('organization-status'), 'Organization saved.', 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('organization-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('project-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const payload = {
+    organization_id: document.getElementById('projectOrganization').value ? Number(document.getElementById('projectOrganization').value) : null,
+    name: document.getElementById('projectName').value.trim(),
+    sector: document.getElementById('projectSector').value,
+    region: document.getElementById('projectRegion').value.trim() || null,
+    status: document.getElementById('projectStatus').value,
+    start_date: document.getElementById('projectStartDate').value || null,
+  };
+  try {
+    projects = await fetchJson('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    renderWorkspaces();
+    setStatus(document.getElementById('project-status'), 'Project saved.', 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('project-status'), error.message, 'danger');
   }
 });
 

@@ -58,6 +58,47 @@ struct Summary {
 }
 
 #[derive(Serialize, FromRow)]
+struct Organization {
+    id: i64,
+    name: String,
+    org_type: String,
+    contact_name: Option<String>,
+    contact_email: Option<String>,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct OrganizationRequest {
+    name: String,
+    org_type: String,
+    contact_name: Option<String>,
+    contact_email: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct Project {
+    id: i64,
+    organization_id: Option<i64>,
+    organization_name: Option<String>,
+    name: String,
+    sector: String,
+    region: Option<String>,
+    status: String,
+    start_date: Option<String>,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct ProjectRequest {
+    organization_id: Option<i64>,
+    name: String,
+    sector: String,
+    region: Option<String>,
+    status: String,
+    start_date: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
 struct InfrastructureAsset {
     id: i64,
     asset_type: String,
@@ -406,6 +447,29 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     let operational_schema = [
         r#"
+        CREATE TABLE IF NOT EXISTS organizations (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            org_type TEXT NOT NULL,
+            contact_name TEXT,
+            contact_email TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS projects (
+            id BIGSERIAL PRIMARY KEY,
+            organization_id BIGINT REFERENCES organizations(id) ON DELETE SET NULL,
+            name TEXT NOT NULL,
+            sector TEXT NOT NULL,
+            region TEXT,
+            status TEXT NOT NULL DEFAULT 'planning',
+            start_date DATE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(organization_id, name)
+        )
+        "#,
+        r#"
         CREATE TABLE IF NOT EXISTS infrastructure_assets (
             id BIGSERIAL PRIMARY KEY,
             asset_type TEXT NOT NULL,
@@ -550,6 +614,73 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn seed_operational_demo(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let seeded_orgs: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM organizations")
+        .fetch_one(pool)
+        .await?;
+    if seeded_orgs.0 == 0 {
+        let organizations = vec![
+            (
+                "Littoral Water Council Pilot",
+                "municipal_council",
+                "Council operations desk",
+                "ops@littoral-water.local",
+            ),
+            (
+                "Solar Clinics Cameroon",
+                "solar_operator",
+                "Rural energy coordinator",
+                "field@solarclinics.local",
+            ),
+        ];
+
+        for organization in organizations {
+            sqlx::query(
+                r#"
+                INSERT INTO organizations (name, org_type, contact_name, contact_email)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (name)
+                DO UPDATE SET
+                    org_type = EXCLUDED.org_type,
+                    contact_name = EXCLUDED.contact_name,
+                    contact_email = EXCLUDED.contact_email
+                "#,
+            )
+            .bind(organization.0)
+            .bind(organization.1)
+            .bind(organization.2)
+            .bind(organization.3)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    let seeded_projects: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM projects")
+        .fetch_one(pool)
+        .await?;
+    if seeded_projects.0 == 0 {
+        sqlx::query(
+            r#"
+            INSERT INTO projects (organization_id, name, sector, region, status, start_date)
+            SELECT id, 'Water point reliability pilot', 'water', 'Littoral', 'active', '2026-05-01'::DATE
+            FROM organizations
+            WHERE name = 'Littoral Water Council Pilot'
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO projects (organization_id, name, sector, region, status, start_date)
+            SELECT id, 'Clinic solar uptime monitoring', 'solar', 'Sud-Ouest', 'planning', '2026-06-01'::DATE
+            FROM organizations
+            WHERE name = 'Solar Clinics Cameroon'
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
+
     let assets = vec![
         (
             "water_point",
@@ -1111,6 +1242,46 @@ async fn fetch_summary(pool: &PgPool) -> Result<Summary, sqlx::Error> {
     })
 }
 
+async fn fetch_organizations(pool: &PgPool) -> Result<Vec<Organization>, sqlx::Error> {
+    sqlx::query_as::<_, Organization>(
+        r#"
+        SELECT
+            id,
+            name,
+            org_type,
+            contact_name,
+            contact_email,
+            created_at::TEXT AS created_at
+        FROM organizations
+        ORDER BY name
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+async fn fetch_projects(pool: &PgPool) -> Result<Vec<Project>, sqlx::Error> {
+    sqlx::query_as::<_, Project>(
+        r#"
+        SELECT
+            p.id,
+            p.organization_id,
+            o.name AS organization_name,
+            p.name,
+            p.sector,
+            p.region,
+            p.status,
+            p.start_date::TEXT AS start_date,
+            p.created_at::TEXT AS created_at
+        FROM projects p
+        LEFT JOIN organizations o ON o.id = p.organization_id
+        ORDER BY p.status, p.region NULLS LAST, p.name
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
 async fn fetch_assets(pool: &PgPool) -> Result<Vec<InfrastructureAsset>, sqlx::Error> {
     sqlx::query_as::<_, InfrastructureAsset>(
         r#"
@@ -1420,6 +1591,107 @@ async fn update_stats(
         }
         Err(err) => {
             eprintln!("Failed to update stats: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/organizations")]
+async fn list_organizations(pool: web::Data<PgPool>) -> impl Responder {
+    match fetch_organizations(pool.get_ref()).await {
+        Ok(organizations) => HttpResponse::Ok().json(organizations),
+        Err(err) => {
+            eprintln!("Failed to query organizations: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/organizations")]
+async fn create_organization(
+    pool: web::Data<PgPool>,
+    payload: web::Json<OrganizationRequest>,
+) -> impl Responder {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO organizations (name, org_type, contact_name, contact_email)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (name)
+        DO UPDATE SET
+            org_type = EXCLUDED.org_type,
+            contact_name = EXCLUDED.contact_name,
+            contact_email = EXCLUDED.contact_email
+        "#,
+    )
+    .bind(&payload.name)
+    .bind(&payload.org_type)
+    .bind(&payload.contact_name)
+    .bind(&payload.contact_email)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(_) => match fetch_organizations(pool.get_ref()).await {
+            Ok(organizations) => HttpResponse::Ok().json(organizations),
+            Err(err) => {
+                eprintln!("Failed to return organizations: {}", err);
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        Err(err) => {
+            eprintln!("Failed to create organization: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/projects")]
+async fn list_projects(pool: web::Data<PgPool>) -> impl Responder {
+    match fetch_projects(pool.get_ref()).await {
+        Ok(projects) => HttpResponse::Ok().json(projects),
+        Err(err) => {
+            eprintln!("Failed to query projects: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/projects")]
+async fn create_project(
+    pool: web::Data<PgPool>,
+    payload: web::Json<ProjectRequest>,
+) -> impl Responder {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO projects (organization_id, name, sector, region, status, start_date)
+        VALUES ($1, $2, $3, $4, $5, $6::DATE)
+        ON CONFLICT (organization_id, name)
+        DO UPDATE SET
+            sector = EXCLUDED.sector,
+            region = EXCLUDED.region,
+            status = EXCLUDED.status,
+            start_date = EXCLUDED.start_date
+        "#,
+    )
+    .bind(payload.organization_id)
+    .bind(&payload.name)
+    .bind(&payload.sector)
+    .bind(&payload.region)
+    .bind(&payload.status)
+    .bind(&payload.start_date)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(_) => match fetch_projects(pool.get_ref()).await {
+            Ok(projects) => HttpResponse::Ok().json(projects),
+            Err(err) => {
+                eprintln!("Failed to return projects: {}", err);
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        Err(err) => {
+            eprintln!("Failed to create project: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }
@@ -1970,6 +2242,10 @@ async fn main() -> std::io::Result<()> {
             .service(summary)
             .service(list_stats)
             .service(update_stats)
+            .service(list_organizations)
+            .service(create_organization)
+            .service(list_projects)
+            .service(create_project)
             .service(list_assets)
             .service(create_asset)
             .service(list_reports)

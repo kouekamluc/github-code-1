@@ -6,11 +6,13 @@
 - Decision report KPIs for active and overdue maintenance tickets.
 - Maintenance ticket workflow actions for start, block, and done.
 - UI export controls in the Decision Report workspace.
+- Local Tailwind build pipeline replacing Bootstrap.
+- Organization and project workspace setup for client pilots.
 
 ## Still missing before a serious pilot
 
-- User accounts, organizations, roles, and audit logs.
-- Project/workspace separation for different councils, NGOs, and companies.
+- User accounts, roles, and audit logs.
+- Deeper workspace separation for different councils, NGOs, and companies.
 - Site profiles that group assets, reports, tickets, alerts, and IoT readings under one physical place.
 - Survey campaign builder with reusable forms, offline field collection, photos, and GPS proof.
 - File/photo uploads for field reports and maintenance completion evidence.
@@ -25,10 +27,10 @@
 
 ## Recommended next implementation order
 
-1. Organizations and project workspaces.
-2. Site profiles and asset grouping.
-3. Survey campaigns with GPS/photo evidence.
-4. IoT device registry and telemetry ingestion keys.
-5. Automatic alert rules and SLA escalation.
-6. PDF report export.
-7. Authentication and role-based access.
+1. Site profiles and asset grouping.
+2. Survey campaigns with GPS/photo evidence.
+3. IoT device registry and telemetry ingestion keys.
+4. Automatic alert rules and SLA escalation.
+5. PDF report export.
+6. Authentication and role-based access.
+7. Audit logs and production observability.

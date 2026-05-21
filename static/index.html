@@ -21,6 +21,7 @@
       <p class="nav-label">Command center</p>
       <nav class="tabbar">
         <button class="tab-button active" data-view="overview">Overview</button>
+        <button class="tab-button" data-view="workspaces">Workspaces</button>
         <button class="tab-button" data-view="areas">Area Matrix</button>
         <button class="tab-button" data-view="profile">Area Profile</button>
         <button class="tab-button" data-view="assets">Assets</button>
@@ -100,6 +101,72 @@
               <div id="overview-tickets" class="compact-stack"></div>
             </section>
           </aside>
+        </div>
+      </section>
+
+      <section class="view-section" id="view-workspaces">
+        <div class="editor-grid">
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Client setup</p>
+                <h2>Register organization</h2>
+              </div>
+            </div>
+            <form id="organization-form" novalidate>
+              <input class="form-control mb-2" id="organizationName" placeholder="Organization name" required />
+              <select class="form-select mb-2" id="organizationType">
+                <option value="municipal_council">Municipal council</option>
+                <option value="ngo">NGO</option>
+                <option value="solar_operator">Solar operator</option>
+                <option value="water_operator">Water operator</option>
+                <option value="telecom">Telecom</option>
+              </select>
+              <input class="form-control mb-2" id="organizationContactName" placeholder="Contact name" />
+              <input type="email" class="form-control mb-2" id="organizationContactEmail" placeholder="Contact email" />
+              <button class="btn btn-primary w-100">Save organization</button>
+              <div id="organization-status" class="mt-3"></div>
+            </form>
+
+            <div class="section-divider"></div>
+
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Pilot scope</p>
+                <h2>Create project</h2>
+              </div>
+            </div>
+            <form id="project-form" novalidate>
+              <select class="form-select mb-2" id="projectOrganization"></select>
+              <input class="form-control mb-2" id="projectName" placeholder="Project name" required />
+              <select class="form-select mb-2" id="projectSector">
+                <option value="water">Water</option>
+                <option value="solar">Solar</option>
+                <option value="connectivity">Connectivity</option>
+                <option value="public_assets">Public assets</option>
+              </select>
+              <input class="form-control mb-2" id="projectRegion" placeholder="Region" />
+              <select class="form-select mb-2" id="projectStatus">
+                <option value="planning">Planning</option>
+                <option value="active">Active</option>
+                <option value="paused">Paused</option>
+                <option value="completed">Completed</option>
+              </select>
+              <input type="date" class="form-control mb-2" id="projectStartDate" />
+              <button class="btn btn-primary w-100">Save project</button>
+              <div id="project-status" class="mt-3"></div>
+            </form>
+          </div>
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Client portfolio</p>
+                <h2>Organizations and projects</h2>
+              </div>
+            </div>
+            <div id="organizations-list" class="list-stack mb-2"></div>
+            <div id="projects-list" class="list-stack"></div>
+          </div>
         </div>
       </section>
 

@@ -131,7 +131,7 @@ function renderAreaProfile(area = selectedArea) {
       <div>
         <p class="eyebrow mb-2">${escapeHtml(area.region)} / ${escapeHtml(area.department)}</p>
         <h3>${escapeHtml(area.commune)}</h3>
-        <p>${escapeHtml(area.pcode || 'Manual area')} · ${gpsLabel(area)} · ${area.area_sqkm ? `${formatNumber(Math.round(area.area_sqkm))} km²` : 'Area unknown'}</p>
+        <p>${escapeHtml(area.pcode || 'Manual area')} &middot; ${gpsLabel(area)} &middot; ${area.area_sqkm ? `${formatNumber(Math.round(area.area_sqkm))} km2` : 'Area unknown'}</p>
       </div>
       <span class="priority-badge priority-${escapeHtml((localPriority?.priority_label || 'Watch').toLowerCase())}">${escapeHtml(localPriority?.priority_label || 'Watch')}</span>
     </div>
@@ -257,7 +257,7 @@ function updateMapMarkers(stats) {
   assets.forEach(asset => {
     if (!isInCameroon(asset.latitude, asset.longitude)) return;
     const marker = L.marker([asset.latitude, asset.longitude]);
-    marker.bindPopup(`<strong>${escapeHtml(asset.name)}</strong><br />${escapeHtml(asset.asset_type)} · ${escapeHtml(asset.status)}<br />${escapeHtml(asset.commune)}`);
+    marker.bindPopup(`<strong>${escapeHtml(asset.name)}</strong><br />${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)}<br />${escapeHtml(asset.commune)}`);
     marker.addTo(assetLayer);
   });
 
@@ -318,6 +318,8 @@ function renderAlerts() {
       renderPriority();
     });
   });
+
+  renderOverviewAlerts();
 }
 
 function renderPriority() {
@@ -326,6 +328,39 @@ function renderPriority() {
       <div><strong>${escapeHtml(zone.commune)}</strong><span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)} &middot; ${formatNumber(zone.population)} people</span></div>
       <span class="priority-badge priority-${escapeHtml(zone.priority_label.toLowerCase())}">${escapeHtml(zone.priority_label)} ${zone.priority_score.toFixed(0)}</span>
       <p>${zone.open_alert_count} open alerts &middot; ${zone.asset_count} monitored assets &middot; ${zone.report_count} field reports &middot; ${formatRate(zone.phone_rate)} phone ownership</p>
+    </article>
+  `).join('');
+
+  renderOverviewPriority();
+}
+
+function renderOverviewAlerts() {
+  const target = document.getElementById('overview-alerts');
+  if (!target) return;
+  const openAlerts = alerts.filter(alert => alert.status !== 'resolved').slice(0, 4);
+  target.innerHTML = openAlerts.length ? openAlerts.map(alert => `
+    <article class="compact-card severity-${escapeHtml(alert.severity)}">
+      <div>
+        <strong>${escapeHtml(alert.title)}</strong>
+        <span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span>
+      </div>
+      <span class="status-pill">${escapeHtml(alert.severity)}</span>
+      <p>${escapeHtml(alert.message)}</p>
+    </article>
+  `).join('') : '<div class="empty-state">No open alerts.</div>';
+}
+
+function renderOverviewPriority() {
+  const target = document.getElementById('overview-priority');
+  if (!target) return;
+  target.innerHTML = priorityZones.slice(0, 5).map(zone => `
+    <article class="compact-card">
+      <div>
+        <strong>${escapeHtml(zone.commune)}</strong>
+        <span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)}</span>
+      </div>
+      <span class="priority-badge priority-${escapeHtml(zone.priority_label.toLowerCase())}">${zone.priority_score.toFixed(0)}</span>
+      <p>${formatNumber(zone.population)} people &middot; ${zone.open_alert_count} alerts &middot; ${formatRate(zone.phone_rate)} phone ownership</p>
     </article>
   `).join('');
 }

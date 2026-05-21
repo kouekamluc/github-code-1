@@ -9,264 +9,282 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark app-nav">
-    <div class="container-fluid">
-      <a class="navbar-brand" href="#">InfraPulse Cameroon</a>
-      <span class="navbar-text">Infrastructure intelligence for water, solar, connectivity, and field operations</span>
-    </div>
-  </nav>
-
-  <main class="container-fluid dashboard-shell py-4">
-    <section class="vision-band mb-4">
-      <div>
-        <p class="eyebrow mb-2">Local infrastructure intelligence</p>
-        <h1>Know what is working, what is failing, and where to act first.</h1>
-        <p class="hero-copy">A live operating picture for councils, NGOs, telecoms, utilities, and infrastructure teams working across Cameroon.</p>
-      </div>
-      <div id="data-status" aria-live="polite"></div>
-    </section>
-
-    <div class="app-layout">
-      <aside class="tabbar surface" aria-label="Product navigation">
-        <p class="nav-label">Workspace</p>
-        <button class="tab-button active" data-view="overview"><span>01</span>Overview</button>
-        <button class="tab-button" data-view="areas"><span>02</span>Area Matrix</button>
-        <button class="tab-button" data-view="profile"><span>03</span>Area Profile</button>
-        <button class="tab-button" data-view="assets"><span>04</span>Assets</button>
-        <button class="tab-button" data-view="reports"><span>05</span>Field Reports</button>
-        <button class="tab-button" data-view="alerts"><span>06</span>Alerts</button>
-        <button class="tab-button" data-view="priority"><span>07</span>Priority Zones</button>
-        <button class="tab-button" data-view="iot"><span>08</span>IoT Signals</button>
-        <button class="tab-button" data-view="decision"><span>09</span>Decision Report</button>
-      </aside>
-
-      <div class="content-stage">
-    <section class="view-section active" id="view-overview">
-      <div class="workspace-grid mb-4">
-        <div class="surface map-surface">
-          <div class="surface-header">
-            <div>
-              <p class="eyebrow mb-1">GPS signal layer</p>
-              <h2>Cameroon infrastructure map</h2>
-            </div>
-            <button class="btn btn-light" id="refresh-button">Refresh data</button>
-          </div>
-          <div class="row g-3 mb-3">
-            <div class="col-md-4">
-              <label class="form-label" for="regionFilter">Region</label>
-              <select id="regionFilter" class="form-select" data-label="regions"></select>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label" for="departmentFilter">Department</label>
-              <select id="departmentFilter" class="form-select" data-label="departments"></select>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label" for="communeFilter">Arrondissement</label>
-              <select id="communeFilter" class="form-select" data-label="arrondissements"></select>
-            </div>
-          </div>
-          <div id="map"></div>
-        </div>
-
-        <div class="surface insight-surface">
-          <div class="surface-header">
-            <div>
-              <p class="eyebrow mb-1">Executive signal</p>
-              <h2>National cockpit</h2>
-            </div>
-          </div>
-          <div class="summary-grid" id="summary-cards"></div>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="InfraPulse navigation">
+      <div class="brand-block">
+        <div class="brand-mark">IP</div>
+        <div>
+          <strong>InfraPulse</strong>
+          <span>Cameroon</span>
         </div>
       </div>
-    </section>
 
-    <section class="view-section" id="view-profile">
-      <div class="surface">
-        <div class="surface-header">
-          <div>
-            <p class="eyebrow mb-1">Selected area</p>
-            <h2>Area profile</h2>
-          </div>
-        </div>
-        <div id="area-profile" class="profile-grid"></div>
+      <p class="nav-label">Command center</p>
+      <nav class="tabbar">
+        <button class="tab-button active" data-view="overview">Overview</button>
+        <button class="tab-button" data-view="areas">Area Matrix</button>
+        <button class="tab-button" data-view="profile">Area Profile</button>
+        <button class="tab-button" data-view="assets">Assets</button>
+        <button class="tab-button" data-view="reports">Field Reports</button>
+        <button class="tab-button" data-view="alerts">Alerts</button>
+        <button class="tab-button" data-view="priority">Priority Zones</button>
+        <button class="tab-button" data-view="iot">IoT Signals</button>
+        <button class="tab-button" data-view="decision">Decision Report</button>
+      </nav>
+
+      <div class="sidebar-note">
+        <span>Live scope</span>
+        <strong>Water, solar, connectivity, population, and field signals.</strong>
       </div>
-    </section>
+    </aside>
 
-    <section class="view-section" id="view-areas">
-      <div class="surface table-surface">
-        <div class="surface-header">
-          <div>
-            <p class="eyebrow mb-1">Administrative matrix</p>
-            <h2>All departments and arrondissements</h2>
-          </div>
+    <main class="main-stage">
+      <header class="command-header">
+        <div>
+          <p class="eyebrow">Local infrastructure intelligence</p>
+          <h1>Cameroon operating picture</h1>
+          <p>See demand, weak coverage, field reports, monitored assets, and priority zones before teams move.</p>
         </div>
-        <div class="table-responsive">
-          <table class="table table-hover align-middle">
-            <thead class="table-light">
-              <tr>
-                <th>P-code</th>
-                <th>Region</th>
-                <th>Department</th>
-                <th>Arrondissement</th>
-                <th>GPS</th>
-                <th>Phone owners</th>
-                <th>Population</th>
-                <th>Ownership rate</th>
-                <th>Confidence</th>
-              </tr>
-            </thead>
-            <tbody id="regions-table-body"></tbody>
-          </table>
+        <div class="header-actions">
+          <div id="data-status" aria-live="polite"></div>
+          <button class="btn btn-primary" id="refresh-button">Refresh data</button>
         </div>
-      </div>
-    </section>
+      </header>
 
-    <section class="view-section" id="view-assets">
-      <div class="editor-grid">
+      <section class="view-section active" id="view-overview">
+        <div class="summary-grid" id="summary-cards"></div>
+
+        <div class="overview-grid">
+          <section class="surface map-surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">GPS signal layer</p>
+                <h2>Infrastructure map</h2>
+              </div>
+            </div>
+            <div class="filter-grid">
+              <label>
+                <span>Region</span>
+                <select id="regionFilter" class="form-select" data-label="regions"></select>
+              </label>
+              <label>
+                <span>Department</span>
+                <select id="departmentFilter" class="form-select" data-label="departments"></select>
+              </label>
+              <label>
+                <span>Arrondissement</span>
+                <select id="communeFilter" class="form-select" data-label="arrondissements"></select>
+              </label>
+            </div>
+            <div id="map"></div>
+          </section>
+
+          <aside class="ops-rail">
+            <section class="surface dark-surface">
+              <div class="surface-header">
+                <div>
+                  <p class="eyebrow">Action queue</p>
+                  <h2>Open alerts</h2>
+                </div>
+              </div>
+              <div id="overview-alerts" class="compact-stack"></div>
+            </section>
+
+            <section class="surface">
+              <div class="surface-header">
+                <div>
+                  <p class="eyebrow">Where to act</p>
+                  <h2>Priority zones</h2>
+                </div>
+              </div>
+              <div id="overview-priority" class="compact-stack"></div>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view-section" id="view-profile">
         <div class="surface">
           <div class="surface-header">
             <div>
-              <p class="eyebrow mb-1">Asset registry</p>
-              <h2>Add monitored asset</h2>
+              <p class="eyebrow">Selected area</p>
+              <h2>Area profile</h2>
             </div>
           </div>
-          <form id="asset-form" novalidate>
-            <input class="form-control mb-2" id="assetName" placeholder="Asset name" required />
-            <select class="form-select mb-2" id="assetType">
-              <option value="water_point">Water point</option>
-              <option value="solar_system">Solar system</option>
-              <option value="connectivity_probe">Connectivity probe</option>
-              <option value="clinic">Clinic</option>
-              <option value="school">School</option>
-            </select>
-            <input class="form-control mb-2" id="assetRegion" placeholder="Region" required />
-            <input class="form-control mb-2" id="assetDepartment" placeholder="Department" required />
-            <input class="form-control mb-2" id="assetCommune" placeholder="Arrondissement" required />
-            <div class="row g-2 mb-2">
-              <div class="col"><input type="number" step="0.0001" class="form-control" id="assetLatitude" placeholder="Latitude" required /></div>
-              <div class="col"><input type="number" step="0.0001" class="form-control" id="assetLongitude" placeholder="Longitude" required /></div>
-            </div>
-            <select class="form-select mb-2" id="assetStatus">
-              <option value="online">Online</option>
-              <option value="warning">Warning</option>
-              <option value="critical">Critical</option>
-              <option value="offline">Offline</option>
-            </select>
-            <input class="form-control mb-2" id="assetOperator" placeholder="Operator" />
-            <input type="date" class="form-control mb-2" id="assetInstalledAt" />
-            <textarea class="form-control mb-2" id="assetNotes" placeholder="Notes"></textarea>
-            <button class="btn btn-primary w-100">Save asset</button>
-            <div id="asset-status" class="mt-3"></div>
-          </form>
+          <div id="area-profile" class="profile-grid"></div>
         </div>
+      </section>
+
+      <section class="view-section" id="view-areas">
+        <div class="surface table-surface">
+          <div class="surface-header">
+            <div>
+              <p class="eyebrow">Administrative matrix</p>
+              <h2>All departments and arrondissements</h2>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle">
+              <thead>
+                <tr>
+                  <th>P-code</th>
+                  <th>Region</th>
+                  <th>Department</th>
+                  <th>Arrondissement</th>
+                  <th>GPS</th>
+                  <th>Phone owners</th>
+                  <th>Population</th>
+                  <th>Ownership rate</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody id="regions-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view-section" id="view-assets">
+        <div class="editor-grid">
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Asset registry</p>
+                <h2>Add monitored asset</h2>
+              </div>
+            </div>
+            <form id="asset-form" novalidate>
+              <input class="form-control mb-2" id="assetName" placeholder="Asset name" required />
+              <select class="form-select mb-2" id="assetType">
+                <option value="water_point">Water point</option>
+                <option value="solar_system">Solar system</option>
+                <option value="connectivity_probe">Connectivity probe</option>
+                <option value="clinic">Clinic</option>
+                <option value="school">School</option>
+              </select>
+              <input class="form-control mb-2" id="assetRegion" placeholder="Region" required />
+              <input class="form-control mb-2" id="assetDepartment" placeholder="Department" required />
+              <input class="form-control mb-2" id="assetCommune" placeholder="Arrondissement" required />
+              <div class="row g-2 mb-2">
+                <div class="col"><input type="number" step="0.0001" class="form-control" id="assetLatitude" placeholder="Latitude" required /></div>
+                <div class="col"><input type="number" step="0.0001" class="form-control" id="assetLongitude" placeholder="Longitude" required /></div>
+              </div>
+              <select class="form-select mb-2" id="assetStatus">
+                <option value="online">Online</option>
+                <option value="warning">Warning</option>
+                <option value="critical">Critical</option>
+                <option value="offline">Offline</option>
+              </select>
+              <input class="form-control mb-2" id="assetOperator" placeholder="Operator" />
+              <input type="date" class="form-control mb-2" id="assetInstalledAt" />
+              <textarea class="form-control mb-2" id="assetNotes" placeholder="Notes"></textarea>
+              <button class="btn btn-primary w-100">Save asset</button>
+              <div id="asset-status" class="mt-3"></div>
+            </form>
+          </div>
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Monitored portfolio</p>
+                <h2>Assets</h2>
+              </div>
+            </div>
+            <div id="assets-list" class="list-stack"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view-section" id="view-reports">
+        <div class="editor-grid">
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Ground truth</p>
+                <h2>Submit field report</h2>
+              </div>
+            </div>
+            <form id="report-form" novalidate>
+              <input type="number" class="form-control mb-2" id="reportAssetId" placeholder="Asset ID (optional)" />
+              <input class="form-control mb-2" id="reportType" placeholder="Report type" required />
+              <input class="form-control mb-2" id="reportRegion" placeholder="Region" required />
+              <input class="form-control mb-2" id="reportDepartment" placeholder="Department" required />
+              <input class="form-control mb-2" id="reportCommune" placeholder="Arrondissement" required />
+              <div class="row g-2 mb-2">
+                <div class="col"><input type="number" step="0.0001" class="form-control" id="reportLatitude" placeholder="Latitude" required /></div>
+                <div class="col"><input type="number" step="0.0001" class="form-control" id="reportLongitude" placeholder="Longitude" required /></div>
+              </div>
+              <select class="form-select mb-2" id="reportStatus">
+                <option value="verified">Verified</option>
+                <option value="needs_followup">Needs follow-up</option>
+                <option value="open">Open</option>
+              </select>
+              <input class="form-control mb-2" id="reportSubmittedBy" placeholder="Submitted by" required />
+              <textarea class="form-control mb-2" id="reportNotes" placeholder="Field notes" required></textarea>
+              <button class="btn btn-primary w-100">Submit report</button>
+              <div id="report-status" class="mt-3"></div>
+            </form>
+          </div>
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Recent reports</p>
+                <h2>Field feed</h2>
+              </div>
+            </div>
+            <div id="reports-list" class="list-stack"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view-section" id="view-alerts">
         <div class="surface">
           <div class="surface-header">
             <div>
-              <p class="eyebrow mb-1">Monitored portfolio</p>
-              <h2>Assets</h2>
+              <p class="eyebrow">Operations</p>
+              <h2>Alerts and maintenance triggers</h2>
             </div>
           </div>
-          <div id="assets-list" class="list-stack"></div>
+          <div id="alerts-list" class="list-stack"></div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="view-section" id="view-reports">
-      <div class="editor-grid">
+      <section class="view-section" id="view-priority">
         <div class="surface">
           <div class="surface-header">
             <div>
-              <p class="eyebrow mb-1">Ground truth</p>
-              <h2>Submit field report</h2>
+              <p class="eyebrow">Decision engine</p>
+              <h2>Priority zones</h2>
             </div>
           </div>
-          <form id="report-form" novalidate>
-            <input type="number" class="form-control mb-2" id="reportAssetId" placeholder="Asset ID (optional)" />
-            <input class="form-control mb-2" id="reportType" placeholder="Report type" required />
-            <input class="form-control mb-2" id="reportRegion" placeholder="Region" required />
-            <input class="form-control mb-2" id="reportDepartment" placeholder="Department" required />
-            <input class="form-control mb-2" id="reportCommune" placeholder="Arrondissement" required />
-            <div class="row g-2 mb-2">
-              <div class="col"><input type="number" step="0.0001" class="form-control" id="reportLatitude" placeholder="Latitude" required /></div>
-              <div class="col"><input type="number" step="0.0001" class="form-control" id="reportLongitude" placeholder="Longitude" required /></div>
-            </div>
-            <select class="form-select mb-2" id="reportStatus">
-              <option value="verified">Verified</option>
-              <option value="needs_followup">Needs follow-up</option>
-              <option value="open">Open</option>
-            </select>
-            <input class="form-control mb-2" id="reportSubmittedBy" placeholder="Submitted by" required />
-            <textarea class="form-control mb-2" id="reportNotes" placeholder="Field notes" required></textarea>
-            <button class="btn btn-primary w-100">Submit report</button>
-            <div id="report-status" class="mt-3"></div>
-          </form>
+          <div id="priority-list" class="list-stack"></div>
         </div>
+      </section>
+
+      <section class="view-section" id="view-iot">
         <div class="surface">
           <div class="surface-header">
             <div>
-              <p class="eyebrow mb-1">Recent reports</p>
-              <h2>Field feed</h2>
+              <p class="eyebrow">Device telemetry</p>
+              <h2>IoT signal stream</h2>
             </div>
           </div>
-          <div id="reports-list" class="list-stack"></div>
+          <div id="iot-list" class="list-stack"></div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="view-section" id="view-alerts">
-      <div class="surface">
-        <div class="surface-header">
-          <div>
-            <p class="eyebrow mb-1">Operations</p>
-            <h2>Alerts and maintenance triggers</h2>
+      <section class="view-section" id="view-decision">
+        <div class="surface">
+          <div class="surface-header">
+            <div>
+              <p class="eyebrow">Board-ready output</p>
+              <h2>Decision report</h2>
+            </div>
           </div>
+          <div id="decision-report" class="report-panel"></div>
         </div>
-        <div id="alerts-list" class="list-stack"></div>
-      </div>
-    </section>
-
-    <section class="view-section" id="view-priority">
-      <div class="surface">
-        <div class="surface-header">
-          <div>
-            <p class="eyebrow mb-1">Decision engine</p>
-            <h2>Priority zones</h2>
-          </div>
-        </div>
-        <div id="priority-list" class="list-stack"></div>
-      </div>
-    </section>
-
-    <section class="view-section" id="view-iot">
-      <div class="surface">
-        <div class="surface-header">
-          <div>
-            <p class="eyebrow mb-1">Device telemetry</p>
-            <h2>IoT signal stream</h2>
-          </div>
-        </div>
-        <div id="iot-list" class="list-stack"></div>
-      </div>
-    </section>
-
-    <section class="view-section" id="view-decision">
-      <div class="surface">
-        <div class="surface-header">
-          <div>
-            <p class="eyebrow mb-1">Board-ready output</p>
-            <h2>Decision report</h2>
-          </div>
-        </div>
-        <div id="decision-report" class="report-panel"></div>
-      </div>
-    </section>
-      </div>
-    </div>
-  </main>
-
-  <footer class="text-center py-3 text-muted">
-    InfraPulse Cameroon MVP: maps, estimates, field reports, assets, alerts, and IoT signals.
-  </footer>
+      </section>
+    </main>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
   <script src="app.js"></script>

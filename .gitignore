@@ -1,5 +1,6 @@
 target/
 **/*.rs.bk
-*.lock
 .DS_Store
 .env
+data/generated/
+data/sources/

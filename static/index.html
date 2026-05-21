@@ -31,10 +31,11 @@
               <select id="departmentFilter" class="form-select" data-label="departments"></select>
             </div>
             <div class="col-md-4">
-              <label class="form-label" for="communeFilter">Commune</label>
+              <label class="form-label" for="communeFilter">Commune / arrondissement</label>
               <select id="communeFilter" class="form-select" data-label="communes"></select>
             </div>
           </div>
+          <div id="data-status" class="mb-3" aria-live="polite"></div>
           <div id="map"></div>
         </div>
       </div>
@@ -55,7 +56,7 @@
           <div class="card shadow-sm summary-panel">
             <div class="card-body">
               <h3 class="card-title">Update location data</h3>
-              <form id="update-form">
+              <form id="update-form" novalidate>
                 <div class="mb-3">
                   <label for="region" class="form-label">Region</label>
                   <input type="text" class="form-control" id="region" placeholder="e.g. Centre" required />
@@ -65,7 +66,7 @@
                   <input type="text" class="form-control" id="department" placeholder="e.g. Mefou-et-Afamba" required />
                 </div>
                 <div class="mb-3">
-                  <label for="commune" class="form-label">Commune</label>
+                  <label for="commune" class="form-label">Commune / arrondissement</label>
                   <input type="text" class="form-control" id="commune" placeholder="e.g. Yaoundé I" required />
                 </div>
                 <div class="mb-3">
@@ -75,20 +76,20 @@
                 <div class="row gy-3">
                   <div class="col-6">
                     <label for="latitude" class="form-label">Latitude</label>
-                    <input type="number" step="0.0001" class="form-control" id="latitude" placeholder="3.8480" required />
+                    <input type="number" step="0.0001" min="1.5" max="13.5" class="form-control" id="latitude" placeholder="3.8480" required />
                   </div>
                   <div class="col-6">
                     <label for="longitude" class="form-label">Longitude</label>
-                    <input type="number" step="0.0001" class="form-control" id="longitude" placeholder="11.5021" required />
+                    <input type="number" step="0.0001" min="8" max="16.5" class="form-control" id="longitude" placeholder="11.5021" required />
                   </div>
                 </div>
                 <div class="mb-3 mt-3">
                   <label for="phoneOwners" class="form-label">Phone owners</label>
-                  <input type="number" class="form-control" id="phoneOwners" min="0" required />
+                  <input type="number" class="form-control" id="phoneOwners" min="0" />
                 </div>
                 <div class="mb-3">
                   <label for="population" class="form-label">Population</label>
-                  <input type="number" class="form-control" id="population" min="0" required />
+                  <input type="number" class="form-control" id="population" min="0" />
                 </div>
                 <button type="submit" class="btn btn-primary w-100">Save</button>
                 <div id="update-status" class="mt-3"></div>
@@ -114,6 +115,7 @@
                   <th>Department</th>
                   <th>Commune</th>
                   <th>Location</th>
+                  <th>GPS</th>
                   <th>Phone owners</th>
                   <th>Population</th>
                   <th>Ownership rate</th>

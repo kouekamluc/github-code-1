@@ -20,14 +20,25 @@ body {
 #update-status {
   min-height: 1.25rem;
 }
+#data-status {
+  min-height: 2.5rem;
+}
 #map {
   min-height: 420px;
-  border-radius: 0.75rem;
+  border: 1px solid #dee2e6;
+  border-radius: 0.5rem;
   overflow: hidden;
 }
 .leaflet-container {
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
 }
 .table-responsive {
   max-height: 620px;
+}
+.ownership-progress {
+  height: 1rem;
+  min-width: 7rem;
+}
+td code {
+  white-space: nowrap;
 }

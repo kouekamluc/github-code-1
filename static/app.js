@@ -1,8 +1,16 @@
+const CAMEROON_BOUNDS = {
+  minLatitude: 1.5,
+  maxLatitude: 13.5,
+  minLongitude: 8,
+  maxLongitude: 16.5,
+};
+
 const summaryCards = document.getElementById('summary-cards');
 const tableBody = document.getElementById('regions-table-body');
 const refreshButton = document.getElementById('refresh-button');
 const updateForm = document.getElementById('update-form');
 const updateStatus = document.getElementById('update-status');
+const dataStatus = document.getElementById('data-status');
 const regionFilter = document.getElementById('regionFilter');
 const departmentFilter = document.getElementById('departmentFilter');
 const communeFilter = document.getElementById('communeFilter');
@@ -11,23 +19,85 @@ let map;
 let markersLayer;
 let allStats = [];
 
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const contentType = response.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await response.json() : null;
+
+  if (!response.ok) {
+    throw new Error(body?.message || `Request failed with status ${response.status}`);
+  }
+
+  return body;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function formatCoordinate(value) {
+  return Number(value).toFixed(4);
+}
+
+function getGpsLabel(stat) {
+  return `${formatCoordinate(stat.latitude)}, ${formatCoordinate(stat.longitude)}`;
+}
+
+function formatNumber(value) {
+  return value === null || value === undefined ? 'Unknown' : Number(value).toLocaleString();
+}
+
+function formatRate(value) {
+  return value === null || value === undefined ? 'No data' : `${Number(value).toFixed(1)}%`;
+}
+
+function isInCameroon(latitude, longitude) {
+  return Number.isFinite(latitude)
+    && Number.isFinite(longitude)
+    && latitude >= CAMEROON_BOUNDS.minLatitude
+    && latitude <= CAMEROON_BOUNDS.maxLatitude
+    && longitude >= CAMEROON_BOUNDS.minLongitude
+    && longitude <= CAMEROON_BOUNDS.maxLongitude;
+}
+
+function setDataStatus(message, type = 'info') {
+  if (!message) {
+    dataStatus.innerHTML = '';
+    return;
+  }
+
+  dataStatus.innerHTML = `<div class="alert alert-${type} py-2 mb-0">${escapeHtml(message)}</div>`;
+}
+
+function setUpdateStatus(message, type = 'info') {
+  updateStatus.innerHTML = `<div class="alert alert-${type} py-2">${escapeHtml(message)}</div>`;
+}
+
 async function fetchSummary() {
-  const response = await fetch('/api/summary');
-  return response.json();
+  return fetchJson('/api/summary');
 }
 
 async function fetchStats() {
-  const response = await fetch('/api/stats');
-  return response.json();
+  return fetchJson('/api/stats');
 }
 
 function renderSummary(summary) {
+  const ownershipRate = summary.percent_with_phone === null || summary.percent_with_phone === undefined
+    ? 'No data'
+    : `${summary.percent_with_phone.toFixed(1)}%`;
+
   summaryCards.innerHTML = `
     <div class="col-md-4 mb-3">
       <div class="card border-primary">
         <div class="card-body text-center">
           <h5 class="card-subtitle mb-2 text-muted">Phone owners</h5>
-          <p class="display-6 mb-0">${summary.total_phone_owners.toLocaleString()}</p>
+          <p class="display-6 mb-0">${formatNumber(summary.total_phone_owners)}</p>
+          <small class="text-muted">${summary.phone_data_count} locations with phone metrics</small>
         </div>
       </div>
     </div>
@@ -35,7 +105,8 @@ function renderSummary(summary) {
       <div class="card border-success">
         <div class="card-body text-center">
           <h5 class="card-subtitle mb-2 text-muted">Total population</h5>
-          <p class="display-6 mb-0">${summary.total_population.toLocaleString()}</p>
+          <p class="display-6 mb-0">${formatNumber(summary.total_population)}</p>
+          <small class="text-muted">${summary.commune_count} communes / arrondissements</small>
         </div>
       </div>
     </div>
@@ -43,8 +114,8 @@ function renderSummary(summary) {
       <div class="card border-warning">
         <div class="card-body text-center">
           <h5 class="card-subtitle mb-2 text-muted">Ownership rate</h5>
-          <p class="display-6 mb-0">${summary.percent_with_phone.toFixed(1)}%</p>
-          <small class="text-muted">${summary.region_count} regions · ${summary.department_count} departments</small>
+          <p class="display-6 mb-0">${ownershipRate}</p>
+          <small class="text-muted">${summary.region_count} regions / ${summary.department_count} departments</small>
         </div>
       </div>
     </div>
@@ -52,24 +123,38 @@ function renderSummary(summary) {
 }
 
 function renderRegions(regions) {
+  if (!regions.length) {
+    tableBody.innerHTML = `
+      <tr>
+        <td colspan="8" class="text-center text-muted py-4">No locations match the selected filters.</td>
+      </tr>
+    `;
+    return;
+  }
+
   tableBody.innerHTML = regions
     .map(region => {
-      const rate = region.population > 0 ? region.phone_rate : 0;
-      return `
-        <tr>
-          <td>${region.region}</td>
-          <td>${region.department}</td>
-          <td>${region.commune}</td>
-          <td>${region.location}</td>
-          <td>${region.phone_owners.toLocaleString()}</td>
-          <td>${region.population.toLocaleString()}</td>
-          <td>
-            <div class="progress" style="height: 1rem;">
-              <div class="progress-bar" role="progressbar" style="width: ${rate.toFixed(1)}%;" aria-valuenow="${rate.toFixed(1)}" aria-valuemin="0" aria-valuemax="100">
-                ${rate.toFixed(1)}%
+      const rate = region.phone_rate ?? 0;
+      const progressWidth = Math.min(Math.max(rate, 0), 100);
+      const rateCell = region.phone_rate === null || region.phone_rate === undefined
+        ? '<span class="text-muted">No data</span>'
+        : `
+            <div class="progress ownership-progress">
+              <div class="progress-bar" role="progressbar" style="width: ${progressWidth.toFixed(1)}%;" aria-valuenow="${rate.toFixed(1)}" aria-valuemin="0" aria-valuemax="100">
+                ${formatRate(region.phone_rate)}
               </div>
             </div>
-          </td>
+          `;
+      return `
+        <tr>
+          <td>${escapeHtml(region.region)}</td>
+          <td>${escapeHtml(region.department)}</td>
+          <td>${escapeHtml(region.commune)}</td>
+          <td>${escapeHtml(region.location)}</td>
+          <td><code>${escapeHtml(getGpsLabel(region))}</code></td>
+          <td>${formatNumber(region.phone_owners)}</td>
+          <td>${formatNumber(region.population)}</td>
+          <td>${rateCell}</td>
         </tr>
       `;
     })
@@ -86,6 +171,7 @@ function createOptionElement(value, label) {
 function populateFilter(selectElement, values, selectedValue) {
   selectElement.innerHTML = '';
   selectElement.appendChild(createOptionElement('all', `All ${selectElement.dataset.label}`));
+
   values.forEach(value => {
     const option = createOptionElement(value, value);
     if (selectedValue && value === selectedValue) {
@@ -96,19 +182,26 @@ function populateFilter(selectElement, values, selectedValue) {
 }
 
 function buildFilterOptions() {
-  const regionValues = [...new Set(allStats.map(s => s.region))].sort();
-  populateFilter(regionFilter, regionValues, regionFilter.value !== 'all' ? regionFilter.value : null);
+  const selectedRegion = regionFilter.value;
+  const selectedDepartment = departmentFilter.value;
+  const selectedCommune = communeFilter.value;
+
+  const regions = [...new Set(allStats.map(stat => stat.region))].sort();
+  const nextRegion = regions.includes(selectedRegion) ? selectedRegion : 'all';
+  populateFilter(regionFilter, regions, nextRegion !== 'all' ? nextRegion : null);
 
   const departments = [...new Set(allStats
-    .filter(s => regionFilter.value === 'all' || s.region === regionFilter.value)
-    .map(s => s.department))].sort();
-  populateFilter(departmentFilter, departments, departmentFilter.value !== 'all' ? departmentFilter.value : null);
+    .filter(stat => regionFilter.value === 'all' || stat.region === regionFilter.value)
+    .map(stat => stat.department))].sort();
+  const nextDepartment = departments.includes(selectedDepartment) ? selectedDepartment : 'all';
+  populateFilter(departmentFilter, departments, nextDepartment !== 'all' ? nextDepartment : null);
 
   const communes = [...new Set(allStats
-    .filter(s => (regionFilter.value === 'all' || s.region === regionFilter.value) &&
-                 (departmentFilter.value === 'all' || s.department === departmentFilter.value))
-    .map(s => s.commune))].sort();
-  populateFilter(communeFilter, communes, communeFilter.value !== 'all' ? communeFilter.value : null);
+    .filter(stat => (regionFilter.value === 'all' || stat.region === regionFilter.value)
+      && (departmentFilter.value === 'all' || stat.department === departmentFilter.value))
+    .map(stat => stat.commune))].sort();
+  const nextCommune = communes.includes(selectedCommune) ? selectedCommune : 'all';
+  populateFilter(communeFilter, communes, nextCommune !== 'all' ? nextCommune : null);
 }
 
 function getFilteredStats() {
@@ -122,48 +215,57 @@ function getFilteredStats() {
 function updateMapMarkers(stats) {
   markersLayer.clearLayers();
 
-  if (!stats.length) {
+  const validStats = stats.filter(stat => isInCameroon(Number(stat.latitude), Number(stat.longitude)));
+  if (!validStats.length) {
+    map.setView([6.5, 12.5], 6);
     return;
   }
 
   const bounds = [];
-  stats.forEach(stat => {
+  validStats.forEach(stat => {
+    const rate = stat.phone_rate ?? 0;
     const marker = L.circleMarker([stat.latitude, stat.longitude], {
-      radius: 9,
-      fillColor: '#0d6efd',
+      radius: Math.max(7, Math.min(16, rate / 7)),
+      fillColor: rate >= 75 ? '#198754' : '#0d6efd',
       color: '#fff',
-      weight: 1,
+      weight: 2,
       opacity: 1,
-      fillOpacity: 0.8,
+      fillOpacity: 0.85,
     });
+
     marker.bindPopup(`
-      <strong>${stat.location}</strong><br />
-      ${stat.commune}, ${stat.department}, ${stat.region}<br />
-      Owners: ${stat.phone_owners.toLocaleString()}<br />
-      Population: ${stat.population.toLocaleString()}<br />
-      Rate: ${stat.phone_rate.toFixed(1)}%
+      <strong>${escapeHtml(stat.location)}</strong><br />
+      ${escapeHtml(stat.commune)}, ${escapeHtml(stat.department)}, ${escapeHtml(stat.region)}<br />
+      GPS: <code>${escapeHtml(getGpsLabel(stat))}</code><br />
+      P-code: ${escapeHtml(stat.pcode || 'Manual')}<br />
+      Area: ${stat.area_sqkm ? `${Number(stat.area_sqkm).toLocaleString()} km²` : 'Unknown'}<br />
+      Owners: ${formatNumber(stat.phone_owners)}<br />
+      Population: ${formatNumber(stat.population)}<br />
+      Rate: ${formatRate(stat.phone_rate)}
     `);
     marker.addTo(markersLayer);
     bounds.push([stat.latitude, stat.longitude]);
   });
 
-  if (bounds.length) {
-    const mapBounds = L.latLngBounds(bounds);
-    map.fitBounds(mapBounds, { padding: [40, 40], maxZoom: 10 });
-  }
+  map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40], maxZoom: 10 });
 }
 
 async function refreshData() {
+  refreshButton.disabled = true;
+  setDataStatus('Loading OCHA COD-AB administrative GPS data...', 'info');
+
   try {
     const [summary, stats] = await Promise.all([fetchSummary(), fetchStats()]);
     allStats = stats;
     renderSummary(summary);
     buildFilterOptions();
-    const filtered = getFilteredStats();
-    renderRegions(filtered);
-    updateMapMarkers(filtered);
+    updateView();
+    setDataStatus(`${stats.length} communes / arrondissements loaded from OCHA COD-AB.`, 'success');
   } catch (error) {
     console.error('Unable to fetch data', error);
+    setDataStatus(error.message || 'Unable to fetch data from the local API.', 'danger');
+  } finally {
+    refreshButton.disabled = false;
   }
 }
 
@@ -182,41 +284,88 @@ function initMap() {
   markersLayer = L.layerGroup().addTo(map);
 }
 
-updateForm.addEventListener('submit', async event => {
-  event.preventDefault();
-
-  const payload = {
+function buildFormPayload() {
+  return {
     region: document.getElementById('region').value.trim(),
     department: document.getElementById('department').value.trim(),
     commune: document.getElementById('commune').value.trim(),
     location: document.getElementById('location').value.trim(),
     latitude: Number(document.getElementById('latitude').value),
     longitude: Number(document.getElementById('longitude').value),
-    phone_owners: Number(document.getElementById('phoneOwners').value),
-    population: Number(document.getElementById('population').value),
+    phone_owners: document.getElementById('phoneOwners').value === ''
+      ? null
+      : Number(document.getElementById('phoneOwners').value),
+    population: document.getElementById('population').value === ''
+      ? null
+      : Number(document.getElementById('population').value),
   };
+}
+
+function validatePayload(payload) {
+  if (!payload.region || !payload.department || !payload.commune || !payload.location) {
+    return 'Region, department, commune, and location are required.';
+  }
+
+  if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) {
+    return 'Latitude and longitude must be valid numbers.';
+  }
+
+  if (!isInCameroon(payload.latitude, payload.longitude)) {
+    return 'GPS coordinates must be inside Cameroon.';
+  }
+
+  if ((payload.phone_owners === null) !== (payload.population === null)) {
+    return 'Phone owners and population must be provided together.';
+  }
+
+  if (payload.phone_owners === null && payload.population === null) {
+    return null;
+  }
+
+  if (!Number.isInteger(payload.phone_owners) || !Number.isInteger(payload.population)) {
+    return 'Phone owners and population must be whole numbers.';
+  }
+
+  if (payload.phone_owners < 0 || payload.population < 0) {
+    return 'Phone owners and population cannot be negative.';
+  }
+
+  if (payload.phone_owners > payload.population) {
+    return 'Phone owners cannot be greater than population.';
+  }
+
+  return null;
+}
+
+updateForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  const payload = buildFormPayload();
+  const validationError = validatePayload(payload);
+
+  if (validationError) {
+    setUpdateStatus(validationError, 'warning');
+    return;
+  }
 
   try {
-    const response = await fetch('/api/stats/update', {
+    updateForm.querySelector('button[type="submit"]').disabled = true;
+    allStats = await fetchJson('/api/stats/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      throw new Error('Update failed');
-    }
-
-    allStats = await response.json();
     buildFilterOptions();
     updateView();
-    const summary = await fetchSummary();
-    renderSummary(summary);
-    updateStatus.innerHTML = '<div class="alert alert-success py-2">Location data updated successfully.</div>';
+    renderSummary(await fetchSummary());
+    setDataStatus(`${allStats.length} communes / arrondissements loaded from OCHA COD-AB.`, 'success');
+    setUpdateStatus('Location data updated successfully.', 'success');
     updateForm.reset();
   } catch (error) {
     console.error(error);
-    updateStatus.innerHTML = '<div class="alert alert-danger py-2">Unable to save location data.</div>';
+    setUpdateStatus(error.message || 'Unable to save location data.', 'danger');
+  } finally {
+    updateForm.querySelector('button[type="submit"]').disabled = false;
   }
 });
 

@@ -8,11 +8,20 @@ const regionFilter = document.getElementById('regionFilter');
 const departmentFilter = document.getElementById('departmentFilter');
 const communeFilter = document.getElementById('communeFilter');
 const areaProfile = document.getElementById('area-profile');
+const matrixSearch = document.getElementById('matrixSearch');
+const matrixSort = document.getElementById('matrixSort');
+const matrixOwnershipFilter = document.getElementById('matrixOwnershipFilter');
+const matrixConfidenceFilter = document.getElementById('matrixConfidenceFilter');
+const matrixExportButton = document.getElementById('matrix-export-button');
+const assetSearch = document.getElementById('assetSearch');
+const assetStatusFilter = document.getElementById('assetStatusFilter');
+const assetTypeFilter = document.getElementById('assetTypeFilter');
 
 let map;
 let markersLayer;
 let assetLayer;
 let reportLayer;
+let nationalSummary = null;
 let allStats = [];
 let assets = [];
 let reports = [];
@@ -20,9 +29,78 @@ let alerts = [];
 let tickets = [];
 let organizations = [];
 let projects = [];
+let workspaceDashboard = null;
+let overviewIntelligence = null;
+let signalProbeDashboard = null;
+let selectedAreaDossier = null;
+let decisionBoard = null;
+let executionBoard = null;
+let sites = [];
+let campaigns = [];
+let decisionSnapshots = [];
 let readings = [];
 let priorityZones = [];
 let selectedArea = null;
+let currentMatrixRows = [];
+
+const workspaceTemplates = [
+  {
+    id: 'council-water',
+    title: 'Council water reliability pilot',
+    orgType: 'municipal_council',
+    sector: 'water',
+    siteType: 'water_cluster',
+    formType: 'gps_photo_survey',
+    trustSignal: 'council_agent_verified',
+    projectName: 'Water reliability validation pilot',
+    siteName: 'Priority water cluster',
+    campaignName: 'Water access GPS/photo baseline',
+    decisionTitle: 'Approve water reliability sprint',
+    rationale: 'Municipal councils need visible proof, beneficiary reach, and quick maintenance wins before larger budget commitment.',
+  },
+  {
+    id: 'ngo-inclusion',
+    title: 'NGO digital inclusion baseline',
+    orgType: 'ngo',
+    sector: 'connectivity',
+    siteType: 'public_asset',
+    formType: 'phone_ownership_baseline',
+    trustSignal: 'gps_photo_verified',
+    projectName: 'Digital inclusion baseline',
+    siteName: 'Community access point',
+    campaignName: 'Phone access and signal baseline',
+    decisionTitle: 'Approve inclusion baseline',
+    rationale: 'NGO programs need gender-aware, offline-capable survey evidence before device, training, or connectivity spend.',
+  },
+  {
+    id: 'clinic-solar',
+    title: 'Clinic solar uptime monitoring',
+    orgType: 'solar_operator',
+    sector: 'solar',
+    siteType: 'clinic',
+    formType: 'asset_condition',
+    trustSignal: 'clinic_staff_verified',
+    projectName: 'Clinic solar uptime monitoring',
+    siteName: 'Clinic energy site',
+    campaignName: 'Clinic power and phone access survey',
+    decisionTitle: 'Approve clinic uptime monitoring',
+    rationale: 'Clinics need uptime evidence, local staff validation, and maintenance SLAs that survive low-connectivity conditions.',
+  },
+  {
+    id: 'telecom-probe',
+    title: 'Telecom signal probe rollout',
+    orgType: 'telecom',
+    sector: 'connectivity',
+    siteType: 'tower',
+    formType: 'signal_check',
+    trustSignal: 'gps_photo_verified',
+    projectName: 'Signal probe expansion pilot',
+    siteName: 'Priority signal probe site',
+    campaignName: 'Evening signal quality campaign',
+    decisionTitle: 'Approve signal probe rollout',
+    rationale: 'Telecom partners need demand, weak-signal, and population proof before probe or tower-adjacent investments.',
+  },
+];
 
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
@@ -53,6 +131,46 @@ function formatRate(value) {
   return `${Number(value ?? 0).toFixed(1)}%`;
 }
 
+function formatMoneyXaf(value) {
+  return value ? `${formatNumber(value)} XAF` : 'Budget not set';
+}
+
+function compactMoneyXaf(value) {
+  const amount = Number(value || 0);
+  if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}M XAF`;
+  if (amount >= 1_000) return `${Math.round(amount / 1_000)}K XAF`;
+  return `${formatNumber(amount)} XAF`;
+}
+
+function estimateBudgetXaf(area, context = localContextForArea(area)) {
+  const base = 450_000;
+  const populationComponent = Math.min(1_900_000, Math.round((area.population || 0) * 5.5));
+  const validationComponent = area.confidence < 0.68 ? 380_000 : 180_000;
+  const alertComponent = context.localAlerts.length * 300_000;
+  const travelComponent = area.phone_rate < 65 ? 260_000 : 120_000;
+  return base + populationComponent + validationComponent + alertComponent + travelComponent;
+}
+
+function estimateReach(area) {
+  return Math.round((area.population || 0) * Math.max(0.08, Math.min(0.32, (100 - area.phone_rate) / 180)));
+}
+
+function channelRecommendation(area) {
+  if (area.phone_rate < 65) return 'Offline forms + SMS follow-up + local focal point';
+  if (area.confidence < 0.7) return 'GPS/photo survey + WhatsApp coordination';
+  return 'WhatsApp coordination + targeted GPS spot checks';
+}
+
+function riskLabel(area, context = localContextForArea(area)) {
+  const score = (area.confidence < 0.68 ? 2 : 0)
+    + (area.phone_rate < 65 ? 2 : 0)
+    + (context.localAlerts.length ? 2 : 0)
+    + (!context.localSites.length ? 1 : 0);
+  if (score >= 5) return 'High risk';
+  if (score >= 3) return 'Medium risk';
+  return 'Controlled risk';
+}
+
 function setStatus(element, message, type = 'info') {
   if (!element) return;
   element.innerHTML = message ? `<div class="alert alert-${type} py-2 mb-0">${escapeHtml(message)}</div>` : '';
@@ -79,6 +197,130 @@ function areaKey(item) {
   return `${item.region}|${item.department}|${item.commune}`;
 }
 
+function selectArea(area, view = 'profile') {
+  selectedArea = area;
+  renderAreaProfile();
+  loadAreaDossier(area);
+  if (view) switchView(view);
+}
+
+function dossierMatches(area, dossier = selectedAreaDossier) {
+  return Boolean(dossier?.area && areaKey(dossier.area) === areaKey(area));
+}
+
+async function loadAreaDossier(area) {
+  if (!area) return;
+  const params = new URLSearchParams({
+    region: area.region,
+    department: area.department,
+    commune: area.commune,
+  });
+  try {
+    selectedAreaDossier = await fetchJson(`/api/area-dossier?${params.toString()}`);
+    if (selectedArea && areaKey(selectedArea) === areaKey(area)) renderAreaProfile();
+  } catch (error) {
+    console.warn('Area dossier unavailable', error);
+  }
+}
+
+function priorityForArea(area) {
+  return priorityZones.find(zone => areaKey(zone) === areaKey(area));
+}
+
+function localContextForArea(area) {
+  const key = areaKey(area);
+  const localAssets = assets.filter(asset => areaKey(asset) === key);
+  const localReports = reports.filter(report => areaKey(report) === key);
+  const localSites = sites.filter(site => areaKey(site) === key);
+  const localCampaigns = campaigns.filter(campaign => (
+    (!campaign.target_region || campaign.target_region === area.region)
+    && (!campaign.target_department || campaign.target_department === area.department)
+    && (!campaign.target_commune || campaign.target_commune === area.commune)
+  ));
+  const localAlerts = alerts.filter(alert => {
+    const alertAsset = assets.find(asset => asset.id === alert.asset_id);
+    return alert.status !== 'resolved'
+      && ((alertAsset && areaKey(alertAsset) === key)
+        || localSites.some(site => site.id === alert.site_profile_id));
+  });
+  const localTickets = tickets.filter(ticket => {
+    const ticketAsset = assets.find(asset => asset.id === ticket.asset_id);
+    return ticket.status !== 'done'
+      && ticket.status !== 'cancelled'
+      && ((ticketAsset && areaKey(ticketAsset) === key)
+        || localSites.some(site => site.id === ticket.site_profile_id));
+  });
+  return {
+    localAssets,
+    localReports,
+    localSites,
+    localCampaigns,
+    localAlerts,
+    localTickets,
+    localPriority: priorityForArea(area),
+  };
+}
+
+function probeHealthFor(asset) {
+  return signalProbeDashboard?.health?.find(item => item.asset_id === asset.id);
+}
+
+function assetArea(asset) {
+  return allStats.find(area => (
+    area.region === asset.region
+    && area.department === asset.department
+    && area.commune === asset.commune
+  ));
+}
+
+function assetContext(asset) {
+  const assetAlerts = alerts.filter(alert => alert.asset_id === asset.id && alert.status !== 'resolved');
+  const assetTickets = tickets.filter(ticket => (
+    ticket.asset_id === asset.id
+    && ticket.status !== 'done'
+    && ticket.status !== 'cancelled'
+  ));
+  const assetReports = reports.filter(report => report.asset_id === asset.id);
+  const assetReadings = readings.filter(reading => reading.asset_id === asset.id);
+  return { assetAlerts, assetTickets, assetReports, assetReadings, health: probeHealthFor(asset) };
+}
+
+function filteredAssets() {
+  const query = (assetSearch?.value || '').trim().toLowerCase();
+  const status = assetStatusFilter?.value || 'all';
+  const type = assetTypeFilter?.value || 'all';
+  return assets.filter(asset => {
+    const haystack = [
+      asset.name,
+      asset.asset_type,
+      asset.status,
+      asset.operator,
+      asset.project_name,
+      asset.site_name,
+      asset.region,
+      asset.department,
+      asset.commune,
+      asset.notes,
+    ].join(' ').toLowerCase();
+    if (query && !haystack.includes(query)) return false;
+    if (status !== 'all' && asset.status !== status) return false;
+    if (type !== 'all' && asset.asset_type !== type) return false;
+    return true;
+  }).sort((a, b) => {
+    const healthA = probeHealthFor(a)?.health_score ?? 100;
+    const healthB = probeHealthFor(b)?.health_score ?? 100;
+    return healthA - healthB;
+  });
+}
+
+function areaActionText(area, context) {
+  if (context.localAlerts.length) return 'Resolve open alerts and dispatch field validation before new deployment.';
+  if (!context.localSites.length) return 'Create a site profile to anchor proof, beneficiaries, and local access notes.';
+  if (!context.localCampaigns.length) return 'Launch an offline GPS/photo campaign for phone access and signal proof.';
+  if ((context.localPriority?.priority_score || 0) >= 52) return 'Prepare a decision snapshot with budget, rationale, and next field action.';
+  return 'Keep in watchlist and refresh when new GPS, survey, or telemetry signals arrive.';
+}
+
 function switchView(view) {
   document.querySelectorAll('.tab-button').forEach(button => {
     button.classList.toggle('active', button.dataset.view === view);
@@ -89,7 +331,18 @@ function switchView(view) {
   if (view === 'overview' && map) setTimeout(() => map.invalidateSize(), 150);
 }
 
-function renderSummary(summary) {
+function renderSummary(summary, overview = overviewIntelligence) {
+  if (overview?.kpis?.length) {
+    summaryCards.innerHTML = overview.kpis.map((kpi, index) => `
+      <div class="metric-tile accent-${escapeHtml(kpi.tone)} ${index === 0 ? 'featured-metric' : ''}">
+        <span>${escapeHtml(kpi.label)}</span>
+        <strong>${escapeHtml(kpi.value)}</strong>
+        <small>${escapeHtml(kpi.detail)}</small>
+      </div>
+    `).join('');
+    return;
+  }
+
   summaryCards.innerHTML = `
     <div class="metric-tile accent-blue featured-metric">
       <span>Estimated phone owners</span>
@@ -114,20 +367,114 @@ function renderSummary(summary) {
   `;
 }
 
+function areaFromOpportunity(opportunity) {
+  return allStats.find(area => (
+    area.region === opportunity.region
+    && area.department === opportunity.department
+    && area.commune === opportunity.commune
+  ));
+}
+
+function renderOverviewIntelligence() {
+  const opportunityTarget = document.getElementById('overview-opportunities');
+  const actionTarget = document.getElementById('overview-actions');
+  const riskTarget = document.getElementById('overview-risks');
+  const readoutTarget = document.getElementById('overview-market-readout');
+  if (!overviewIntelligence || !opportunityTarget || !actionTarget || !riskTarget) return;
+
+  opportunityTarget.innerHTML = overviewIntelligence.top_opportunities?.length ? overviewIntelligence.top_opportunities.map((opportunity, index) => `
+    <article class="opportunity-card priority-${escapeHtml(opportunity.priority_label.toLowerCase())}">
+      <button class="opportunity-main overview-opportunity-action" data-index="${index}">
+        <span>${escapeHtml(opportunity.region)} / ${escapeHtml(opportunity.department)}</span>
+        <strong>${escapeHtml(opportunity.commune)}</strong>
+        <small>${escapeHtml(opportunity.business_case)}</small>
+      </button>
+      <div class="opportunity-metrics">
+        <div><span>Budget</span><strong>${formatMoneyXaf(opportunity.estimated_budget_xaf)}</strong></div>
+        <div><span>Reach</span><strong>${formatNumber(opportunity.likely_reach)}</strong></div>
+        <div><span>Score</span><strong>${Number(opportunity.priority_score).toFixed(0)}</strong></div>
+      </div>
+      <p>${escapeHtml(opportunity.recommended_channel)}</p>
+      <div class="export-actions">
+        <button class="btn btn-outline-secondary btn-sm overview-action" data-action="campaign" data-index="${index}"><i data-lucide="clipboard-plus"></i> Campaign</button>
+        <button class="btn btn-outline-secondary btn-sm overview-action" data-action="decision" data-index="${index}"><i data-lucide="file-plus-2"></i> Decision</button>
+      </div>
+    </article>
+  `).join('') : '<div class="empty-state">No overview opportunities are available yet.</div>';
+
+  actionTarget.innerHTML = overviewIntelligence.action_queue?.length ? overviewIntelligence.action_queue.map(action => `
+    <article class="compact-card priority-${escapeHtml(action.urgency === 'urgent' ? 'high' : action.urgency)}">
+      <div>
+        <strong>${escapeHtml(action.title)}</strong>
+        <span>${escapeHtml(action.action_type)}${action.area ? ` &middot; ${escapeHtml(action.area)}` : ''}</span>
+      </div>
+      <span class="priority-badge priority-${escapeHtml(action.urgency === 'urgent' ? 'high' : action.urgency)}">${escapeHtml(action.urgency)}</span>
+      <p>${escapeHtml(action.reason)}</p>
+    </article>
+  `).join('') : '<div class="empty-state">No immediate action queue.</div>';
+
+  riskTarget.innerHTML = overviewIntelligence.trust_risks?.map(risk => `
+    <article class="risk-card severity-${escapeHtml(risk.severity)}">
+      <span>${escapeHtml(risk.label)}</span>
+      <strong>${escapeHtml(risk.value)}</strong>
+      <p>${escapeHtml(risk.mitigation)}</p>
+    </article>
+  `).join('') || '';
+
+  if (readoutTarget) {
+    readoutTarget.innerHTML = (overviewIntelligence.market_readout || []).map(item => (
+      `<p>${escapeHtml(item)}</p>`
+    )).join('');
+  }
+
+  document.querySelectorAll('.overview-opportunity-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const opportunity = overviewIntelligence.top_opportunities[Number(button.dataset.index)];
+      const area = opportunity && areaFromOpportunity(opportunity);
+      if (area) selectArea(area);
+    });
+  });
+  document.querySelectorAll('.overview-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const opportunity = overviewIntelligence.top_opportunities[Number(button.dataset.index)];
+      const area = opportunity && areaFromOpportunity(opportunity);
+      if (area) prepareAreaAction(button.dataset.action, area);
+    });
+  });
+  const topDecisionButton = document.getElementById('overview-top-decision');
+  if (topDecisionButton) topDecisionButton.onclick = () => {
+    const opportunity = overviewIntelligence.top_opportunities?.[0];
+    const area = opportunity && areaFromOpportunity(opportunity);
+    if (area) prepareAreaAction('decision', area);
+  };
+  if (window.lucide) lucide.createIcons();
+}
+
+async function refreshOverviewLayer() {
+  overviewIntelligence = await fetchJson('/api/overview');
+  if (nationalSummary) renderSummary(nationalSummary, overviewIntelligence);
+  renderOverviewIntelligence();
+}
+
 function renderAreaProfile(area = selectedArea) {
   if (!area) {
     areaProfile.innerHTML = '<div class="empty-state">Select an arrondissement from the map or matrix to inspect its intelligence profile.</div>';
     return;
   }
 
-  const key = areaKey(area);
-  const localAssets = assets.filter(asset => areaKey(asset) === key);
-  const localReports = reports.filter(report => areaKey(report) === key);
-  const localPriority = priorityZones.find(zone => areaKey(zone) === key);
-  const localAlerts = alerts.filter(alert => {
-    const asset = assets.find(item => item.id === alert.asset_id);
-    return asset && areaKey(asset) === key && alert.status !== 'resolved';
-  });
+  const context = localContextForArea(area);
+  const dossier = dossierMatches(area) ? selectedAreaDossier : null;
+  const economics = dossier?.economics;
+  const {
+    localAssets,
+    localReports,
+    localSites,
+    localCampaigns,
+    localAlerts,
+    localTickets,
+    localPriority,
+  } = context;
+  const actionText = areaActionText(area, context);
 
   areaProfile.innerHTML = `
     <div class="profile-hero">
@@ -142,13 +489,107 @@ function renderAreaProfile(area = selectedArea) {
       <div class="metric-tile accent-blue"><span>Population</span><strong>${formatNumber(area.population)}</strong><small>Matrix or measured</small></div>
       <div class="metric-tile accent-green"><span>Phone owners</span><strong>${formatNumber(area.phone_owners)}</strong><small>${formatRate(area.phone_rate)} ownership</small></div>
       <div class="metric-tile accent-gold"><span>Confidence</span><strong>${Math.round(area.confidence * 100)}%</strong><small>${escapeHtml(area.metric_source)}</small></div>
-      <div class="metric-tile accent-red"><span>Validation signal</span><strong>${localAlerts.length}</strong><small>${localAssets.length} probes / ${localReports.length} reports</small></div>
+      <div class="metric-tile accent-red"><span>Priority score</span><strong>${localPriority ? localPriority.priority_score.toFixed(0) : '0'}</strong><small>${localAlerts.length} alerts / ${localTickets.length} active tickets</small></div>
     </div>
+
+    <div class="business-case-grid">
+      <article class="business-card">
+        <span>Estimated pilot budget</span>
+        <strong>${formatMoneyXaf(economics?.estimated_budget_xaf || estimateBudgetXaf(area, context))}</strong>
+        <p>Lean field validation, local coordination, and first response reserve.</p>
+      </article>
+      <article class="business-card">
+        <span>Likely direct reach</span>
+        <strong>${formatNumber(economics?.likely_reach || estimateReach(area))}</strong>
+        <p>People likely affected by the first survey, repair, or access intervention.</p>
+      </article>
+      <article class="business-card">
+        <span>Channel strategy</span>
+        <strong>${escapeHtml(economics?.channel_strategy || channelRecommendation(area))}</strong>
+        <p>Designed around uneven connectivity and trust-building field proof.</p>
+      </article>
+      <article class="business-card">
+        <span>Execution risk</span>
+        <strong>${escapeHtml(economics?.execution_risk || riskLabel(area, context))}</strong>
+        <p>Driven by confidence, ownership, alerts, and whether a trusted site exists.</p>
+      </article>
+    </div>
+
+    <div class="area-action-panel">
+      <div>
+        <p class="eyebrow">Recommended field action</p>
+        <strong>${escapeHtml(economics?.next_action || actionText)}</strong>
+      </div>
+      <div class="export-actions">
+        <button class="btn btn-outline-secondary btn-sm area-action" data-action="probe"><i data-lucide="radio-tower"></i> Probe</button>
+        <button class="btn btn-outline-secondary btn-sm area-action" data-action="campaign"><i data-lucide="clipboard-plus"></i> Survey</button>
+        <button class="btn btn-outline-secondary btn-sm area-action" data-action="site"><i data-lucide="map-pin-plus"></i> Site</button>
+        <button class="btn btn-outline-secondary btn-sm area-action" data-action="decision"><i data-lucide="file-plus-2"></i> Decision</button>
+      </div>
+    </div>
+
+    ${dossier ? `
+      <div class="dossier-intelligence">
+        <div>
+          <p class="eyebrow">Rust dossier intelligence</p>
+          <strong>${escapeHtml(dossier.economics.trust_gap)}</strong>
+        </div>
+        <div class="probe-meta-grid">
+          <div><span>Probes</span><strong>${dossier.assets.length}</strong></div>
+          <div><span>Sites</span><strong>${dossier.sites.length}</strong></div>
+          <div><span>Evidence</span><strong>${dossier.reports.length + dossier.readings.length}</strong></div>
+          <div><span>Open work</span><strong>${dossier.alerts.length + dossier.tickets.length}</strong></div>
+        </div>
+        <div class="market-readout">${dossier.market_notes.map(note => `<p>${escapeHtml(note)}</p>`).join('')}</div>
+      </div>
+    ` : '<div class="empty-state">Loading Rust area dossier...</div>'}
+
+    <div class="area-dossier-grid">
+      <section class="surface nested-surface">
+        <div class="surface-header"><div><p class="eyebrow">Proof layer</p><h2>Sites</h2></div><span class="status-pill">${localSites.length}</span></div>
+        <div class="list-stack">${localSites.length ? localSites.map(site => `
+          <article class="mini-card"><strong>${escapeHtml(site.name)}</strong><span>${escapeHtml(site.site_type)} &middot; ${formatNumber(site.beneficiary_estimate || 0)} beneficiaries</span><p>${escapeHtml(site.trust_signal)} &middot; ${escapeHtml(site.access_notes || 'No access notes')}</p></article>
+        `).join('') : '<div class="empty-state">No site profile in this arrondissement.</div>'}</div>
+      </section>
+      <section class="surface nested-surface">
+        <div class="surface-header"><div><p class="eyebrow">Monitored assets</p><h2>Assets</h2></div><span class="status-pill">${localAssets.length}</span></div>
+        <div class="list-stack">${localAssets.length ? localAssets.map(asset => `
+          <article class="mini-card status-${escapeHtml(asset.status)}"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)} &middot; ${escapeHtml(probeHealthFor(asset)?.health_label || 'Not scored')}</span><p>${escapeHtml(asset.operator || 'No operator')} &middot; ${escapeHtml(asset.notes || 'No notes')}</p><div class="ticket-actions"><button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}">Telemetry</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}">Ticket</button></div></article>
+        `).join('') : '<div class="empty-state">No monitored assets here.</div>'}</div>
+      </section>
+      <section class="surface nested-surface">
+        <div class="surface-header"><div><p class="eyebrow">Ground truth</p><h2>Reports and campaigns</h2></div><span class="status-pill">${localReports.length + localCampaigns.length}</span></div>
+        <div class="list-stack">${[
+          ...localCampaigns.map(campaign => `<article class="mini-card"><strong>${escapeHtml(campaign.name)}</strong><span>${escapeHtml(campaign.form_type)} &middot; ${escapeHtml(campaign.status)}</span><p>${campaign.offline_enabled ? 'Offline-ready' : 'Online only'} &middot; ${escapeHtml(campaign.language_mode)}</p></article>`),
+          ...localReports.slice(0, 4).map(report => `<article class="mini-card"><strong>${escapeHtml(report.report_type)}</strong><span>${escapeHtml(report.status)} &middot; ${escapeHtml(report.evidence_quality)}</span><p>${escapeHtml(report.notes)}</p></article>`),
+        ].join('') || '<div class="empty-state">No campaign or field report yet.</div>'}</div>
+      </section>
+      <section class="surface nested-surface">
+        <div class="surface-header"><div><p class="eyebrow">Execution</p><h2>Alerts and tickets</h2></div><span class="status-pill">${localAlerts.length + localTickets.length}</span></div>
+        <div class="list-stack">${[
+          ...localAlerts.map(alert => `<article class="mini-card severity-${escapeHtml(alert.severity)}"><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span><p>${escapeHtml(alert.message)}</p></article>`),
+          ...localTickets.map(ticket => `<article class="mini-card priority-${escapeHtml(ticket.priority)}"><strong>${escapeHtml(ticket.title)}</strong><span>${escapeHtml(ticket.priority)} &middot; ${escapeHtml(ticket.status)}</span><p>${escapeHtml(ticket.assigned_to || 'Unassigned')} &middot; Due ${escapeHtml(ticket.due_date || 'not set')}</p></article>`),
+        ].join('') || '<div class="empty-state">No open execution work.</div>'}</div>
+      </section>
+    </div>
+
     <div class="profile-notes">
-      <strong>Recommended action:</strong>
-      ${localPriority?.priority_score >= 52 ? 'Prioritize connectivity survey and phone ownership validation.' : localPriority?.priority_score >= 38 ? 'Schedule field signal check and enrich with survey data.' : 'Keep in watchlist and refresh when new GPS or survey signals arrive.'}
+      <strong>Market interpretation:</strong>
+      ${area.phone_rate < 65 ? 'Low estimated ownership suggests stronger offline and SMS-assisted workflows.' : 'Phone access is relatively strong, so digital survey and WhatsApp-style coordination can work if trust proof is visible.'}
+      Confidence is ${Math.round(area.confidence * 100)}%, so ${area.confidence < 0.7 ? 'field validation should happen before budget commitment.' : 'the matrix is usable for prioritization while field teams continue to collect proof.'}
     </div>
   `;
+
+  document.querySelectorAll('.area-action').forEach(button => {
+    button.addEventListener('click', () => prepareAreaAction(button.dataset.action, area));
+  });
+  document.querySelectorAll('.asset-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const asset = assets.find(item => item.id === Number(button.dataset.id));
+      if (asset) prepareAssetAction(button.dataset.action, asset);
+    });
+  });
+  if (window.lucide) lucide.createIcons();
 }
 
 function renderWorkspaces() {
@@ -156,6 +597,32 @@ function renderWorkspaces() {
   orgSelect.innerHTML = '<option value="">No organization</option>' + organizations.map(organization => (
     `<option value="${organization.id}">${escapeHtml(organization.name)}</option>`
   )).join('');
+
+  ['siteProject', 'campaignProject', 'decisionProject', 'assetProject'].forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    select.innerHTML = '<option value="">No project</option>' + projects.map(project => (
+      `<option value="${project.id}">${escapeHtml(project.name)}</option>`
+    )).join('');
+  });
+
+  const assetSiteSelect = document.getElementById('assetSite');
+  if (assetSiteSelect) {
+    assetSiteSelect.innerHTML = '<option value="">No site profile</option>' + sites.map(site => (
+      `<option value="${site.id}">${escapeHtml(site.name)} - ${escapeHtml(site.commune)}</option>`
+    )).join('');
+  }
+
+  const health = workspaceDashboard?.health;
+  const healthTarget = document.getElementById('workspace-health');
+  if (healthTarget && health) {
+    healthTarget.innerHTML = `
+      <div class="metric-tile accent-blue featured-metric"><span>Projects</span><strong>${health.projects}</strong><small>${health.organizations} client workspaces</small></div>
+      <div class="metric-tile accent-green"><span>Field sites</span><strong>${health.sites}</strong><small>Physical proof layer</small></div>
+      <div class="metric-tile accent-gold"><span>Campaigns</span><strong>${health.campaigns}</strong><small>Offline survey plans</small></div>
+      <div class="metric-tile accent-red"><span>Decision records</span><strong>${health.decision_snapshots}</strong><small>${health.active_tickets} active tickets</small></div>
+    `;
+  }
 
   document.getElementById('organizations-list').innerHTML = organizations.map(organization => `
     <article class="list-card">
@@ -178,16 +645,126 @@ function renderWorkspaces() {
       <p>${escapeHtml(project.region || 'National')} &middot; Starts ${escapeHtml(project.start_date || 'not set')}</p>
     </article>
   `).join('');
+
+  const projectOpsTarget = document.getElementById('project-operating-list');
+  if (projectOpsTarget) {
+    projectOpsTarget.innerHTML = projects.length ? projects.map(project => {
+      const projectSites = sites.filter(site => site.project_id === project.id);
+      const projectAssets = assets.filter(asset => asset.project_id === project.id);
+      const projectCampaigns = campaigns.filter(campaign => campaign.project_id === project.id);
+      const projectTickets = tickets.filter(ticket => ticket.project_id === project.id && ticket.status !== 'done' && ticket.status !== 'cancelled');
+      const projectDecisions = decisionSnapshots.filter(decision => decision.project_id === project.id);
+      const readiness = Math.min(100,
+        (projectSites.length ? 24 : 0)
+        + (projectAssets.length ? 22 : 0)
+        + (projectCampaigns.length ? 22 : 0)
+        + (projectDecisions.length ? 20 : 0)
+        + (projectTickets.length === 0 ? 12 : 6));
+      return `
+        <article class="list-card">
+          <div>
+            <strong>${escapeHtml(project.name)}</strong>
+            <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(project.region || 'National')}</span>
+          </div>
+          <span class="priority-badge priority-${readiness >= 70 ? 'watch' : readiness >= 45 ? 'medium' : 'high'}">${readiness}% ready</span>
+          <div class="workspace-progress"><span style="width:${readiness}%"></span></div>
+          <p>${projectSites.length} sites &middot; ${projectAssets.length} assets &middot; ${projectCampaigns.length} campaigns &middot; ${projectTickets.length} active tickets &middot; ${projectDecisions.length} decisions</p>
+          <div class="ticket-actions">
+            <button class="btn btn-sm btn-outline-secondary project-action" data-action="site" data-project="${project.id}">Site</button>
+            <button class="btn btn-sm btn-outline-secondary project-action" data-action="campaign" data-project="${project.id}">Campaign</button>
+            <button class="btn btn-sm btn-outline-secondary project-action" data-action="decision" data-project="${project.id}">Decision</button>
+          </div>
+        </article>
+      `;
+    }).join('') : '<div class="empty-state">Create a project to see execution readiness.</div>';
+  }
+
+  const realitiesTarget = document.getElementById('workspace-market-realities');
+  if (realitiesTarget) {
+    realitiesTarget.innerHTML = (workspaceDashboard?.market_realities || []).map((item, index) => `
+      <article class="insight-card">
+        <span>${index + 1}</span>
+        <strong>${escapeHtml(item)}</strong>
+      </article>
+    `).join('');
+  }
+
+  const templatesTarget = document.getElementById('workspace-templates');
+  if (templatesTarget) {
+    templatesTarget.innerHTML = workspaceTemplates.map(template => `
+      <button class="template-card workspace-template" data-template="${escapeHtml(template.id)}">
+        <span>${escapeHtml(template.orgType.replaceAll('_', ' '))}</span>
+        <strong>${escapeHtml(template.title)}</strong>
+        <small>${escapeHtml(template.rationale)}</small>
+      </button>
+    `).join('');
+  }
+
+  document.getElementById('sites-list').innerHTML = sites.length ? sites.map(site => `
+    <article class="list-card">
+      <div>
+        <strong>${escapeHtml(site.name)}</strong>
+        <span>${escapeHtml(site.site_type)} &middot; ${escapeHtml(site.commune)}, ${escapeHtml(site.department)}</span>
+      </div>
+      <span class="status-pill">${escapeHtml(site.trust_signal)}</span>
+      <p>${escapeHtml(site.project_name || 'No project')} &middot; ${formatNumber(site.beneficiary_estimate || 0)} people &middot; ${escapeHtml(site.access_notes || 'No access notes')}</p>
+    </article>
+  `).join('') : '<div class="empty-state">No site profiles yet.</div>';
+
+  document.getElementById('campaigns-list').innerHTML = campaigns.length ? campaigns.map(campaign => `
+    <article class="list-card status-${escapeHtml(campaign.status)}">
+      <div>
+        <strong>${escapeHtml(campaign.name)}</strong>
+        <span>${escapeHtml(campaign.form_type)} &middot; ${escapeHtml(campaign.target_commune || campaign.target_region || 'National')}</span>
+      </div>
+      <span class="status-pill">${campaign.offline_enabled ? 'offline-ready' : 'online-only'}</span>
+      <p>${escapeHtml(campaign.project_name || 'No project')} &middot; ${escapeHtml(campaign.language_mode)} &middot; ${escapeHtml(campaign.starts_on || 'no start')} to ${escapeHtml(campaign.ends_on || 'no end')}</p>
+    </article>
+  `).join('') : '<div class="empty-state">No survey campaigns yet.</div>';
+
+  document.getElementById('decision-snapshots-list').innerHTML = decisionSnapshots.length ? decisionSnapshots.map(decision => `
+    <article class="list-card priority-${Number(decision.priority_score) >= 70 ? 'high' : Number(decision.priority_score) >= 45 ? 'medium' : 'watch'}">
+      <div>
+        <strong>${escapeHtml(decision.title)}</strong>
+        <span>${escapeHtml(decision.project_name || 'No project')} &middot; ${escapeHtml(decision.decision_stage)}</span>
+      </div>
+      <span class="priority-badge priority-${Number(decision.priority_score) >= 70 ? 'high' : Number(decision.priority_score) >= 45 ? 'medium' : 'watch'}">${Number(decision.priority_score).toFixed(0)}</span>
+      <p>${escapeHtml(decision.rationale)} Next: ${escapeHtml(decision.next_action)}</p>
+    </article>
+  `).join('') : '<div class="empty-state">No decision snapshots yet.</div>';
+
+  if (window.lucide) lucide.createIcons();
+
+  document.querySelectorAll('.project-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const projectId = Number(button.dataset.project);
+      const project = projects.find(item => item.id === projectId);
+      prepareProjectAction(button.dataset.action, project);
+    });
+  });
+
+  document.querySelectorAll('.workspace-template').forEach(button => {
+    button.addEventListener('click', () => applyWorkspaceTemplate(button.dataset.template));
+  });
 }
 
 function renderRegions(regions) {
+  currentMatrixRows = applyMatrixControls(regions);
+  renderMatrixInsights(currentMatrixRows);
   if (!regions.length) {
     tableBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No areas match the selected filters.</td></tr>';
     return;
   }
 
-  tableBody.innerHTML = regions.map(area => {
+  if (!currentMatrixRows.length) {
+    tableBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No areas match the matrix controls.</td></tr>';
+    return;
+  }
+
+  tableBody.innerHTML = currentMatrixRows.map(area => {
     const width = Math.min(Math.max(area.phone_rate, 0), 100);
+    const priority = priorityForArea(area);
+    const context = localContextForArea(area);
     return `
       <tr class="matrix-row" data-key="${escapeHtml(areaKey(area))}">
         <td data-label="P-code"><code>${escapeHtml(area.pcode || 'Manual')}</code></td>
@@ -198,18 +775,107 @@ function renderRegions(regions) {
         <td data-label="Phone owners">${formatNumber(area.phone_owners)}</td>
         <td data-label="Population">${formatNumber(area.population)}</td>
         <td data-label="Ownership rate"><div class="progress ownership-progress"><div class="progress-bar" style="width:${width.toFixed(1)}%">${formatRate(area.phone_rate)}</div></div></td>
-        <td data-label="Confidence"><span class="confidence-pill">${Math.round(area.confidence * 100)}%</span></td>
+        <td data-label="Confidence">
+          <span class="confidence-pill">${Math.round(area.confidence * 100)}%</span>
+          <button class="row-action matrix-profile-action" data-key="${escapeHtml(areaKey(area))}" title="Open area profile"><i data-lucide="arrow-right"></i></button>
+          <small class="matrix-row-meta">${priority ? priority.priority_score.toFixed(0) : '0'} priority &middot; ${context.localAssets.length} assets</small>
+        </td>
       </tr>
     `;
   }).join('');
 
   document.querySelectorAll('.matrix-row').forEach(row => {
     row.addEventListener('click', () => {
-      selectedArea = allStats.find(area => areaKey(area) === row.dataset.key);
-      renderAreaProfile();
-      switchView('profile');
+      const area = allStats.find(item => areaKey(item) === row.dataset.key);
+      if (area) selectArea(area);
     });
   });
+  if (window.lucide) lucide.createIcons();
+}
+
+function applyMatrixControls(regions) {
+  const query = (matrixSearch?.value || '').trim().toLowerCase();
+  const ownership = matrixOwnershipFilter?.value || 'all';
+  const confidence = matrixConfidenceFilter?.value || 'all';
+  const sort = matrixSort?.value || 'priority';
+
+  return regions.filter(area => {
+    const haystack = [area.pcode, area.region, area.department, area.commune, gpsLabel(area)]
+      .join(' ')
+      .toLowerCase();
+    if (query && !haystack.includes(query)) return false;
+    if (ownership === 'under65' && area.phone_rate >= 65) return false;
+    if (ownership === '65to78' && (area.phone_rate < 65 || area.phone_rate > 78)) return false;
+    if (ownership === 'over78' && area.phone_rate <= 78) return false;
+    if (confidence === 'low' && area.confidence >= 0.68) return false;
+    if (confidence === 'medium' && (area.confidence < 0.68 || area.confidence > 0.78)) return false;
+    if (confidence === 'high' && area.confidence <= 0.78) return false;
+    return true;
+  }).sort((a, b) => {
+    if (sort === 'ownership-low') return a.phone_rate - b.phone_rate;
+    if (sort === 'population-high') return b.population - a.population;
+    if (sort === 'confidence-low') return a.confidence - b.confidence;
+    if (sort === 'name') return a.commune.localeCompare(b.commune);
+    return (priorityForArea(b)?.priority_score || 0) - (priorityForArea(a)?.priority_score || 0);
+  });
+}
+
+function renderMatrixInsights(rows) {
+  const target = document.getElementById('matrix-insights');
+  if (!target) return;
+  const population = rows.reduce((sum, row) => sum + row.population, 0);
+  const phoneOwners = rows.reduce((sum, row) => sum + row.phone_owners, 0);
+  const avgOwnership = population ? (phoneOwners / population) * 100 : 0;
+  const lowOwnership = rows.filter(row => row.phone_rate < 65).length;
+  const lowConfidence = rows.filter(row => row.confidence < 0.68).length;
+  target.innerHTML = `
+    <div class="metric-tile accent-blue featured-metric"><span>Filtered areas</span><strong>${formatNumber(rows.length)}</strong><small>${formatNumber(population)} people in view</small></div>
+    <div class="metric-tile accent-green"><span>Average ownership</span><strong>${formatRate(avgOwnership)}</strong><small>${formatNumber(phoneOwners)} estimated phone owners</small></div>
+    <div class="metric-tile accent-gold"><span>Needs validation</span><strong>${lowConfidence}</strong><small>Low-confidence model rows</small></div>
+    <div class="metric-tile accent-red"><span>Access gap</span><strong>${lowOwnership}</strong><small>Under 65% ownership</small></div>
+  `;
+  renderMatrixActionLab(rows);
+}
+
+function renderMatrixActionLab(rows) {
+  const target = document.getElementById('matrix-action-lab');
+  if (!target) return;
+  const topRows = rows.slice(0, 3);
+  const totalBudget = topRows.reduce((sum, area) => sum + estimateBudgetXaf(area), 0);
+  const totalReach = topRows.reduce((sum, area) => sum + estimateReach(area), 0);
+  target.innerHTML = `
+    <div>
+      <p class="eyebrow">Action lab</p>
+      <strong>${topRows.length ? `${topRows.length} best next areas in current filter` : 'No matching areas'}</strong>
+      <span>${formatMoneyXaf(totalBudget)} estimated pilot budget &middot; ${formatNumber(totalReach)} likely direct reach</span>
+    </div>
+    <div class="matrix-action-list">
+      ${topRows.map(area => `
+        <button class="matrix-chip matrix-chip-action" data-key="${escapeHtml(areaKey(area))}">
+          <strong>${escapeHtml(area.commune)}</strong>
+          <span>${formatRate(area.phone_rate)} ownership &middot; ${priorityForArea(area)?.priority_score.toFixed(0) || '0'} score</span>
+        </button>
+      `).join('')}
+    </div>
+    <div class="export-actions">
+      <button class="btn btn-outline-secondary btn-sm" id="matrix-top-campaign"><i data-lucide="clipboard-plus"></i> Campaign from top</button>
+      <button class="btn btn-outline-secondary btn-sm" id="matrix-top-decision"><i data-lucide="file-plus-2"></i> Decision from top</button>
+    </div>
+  `;
+
+  document.querySelectorAll('.matrix-chip-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const area = allStats.find(item => areaKey(item) === button.dataset.key);
+      if (area) selectArea(area);
+    });
+  });
+  document.getElementById('matrix-top-campaign')?.addEventListener('click', () => {
+    if (topRows[0]) prepareAreaAction('campaign', topRows[0]);
+  });
+  document.getElementById('matrix-top-decision')?.addEventListener('click', () => {
+    if (topRows[0]) prepareAreaAction('decision', topRows[0]);
+  });
+  if (window.lucide) lucide.createIcons();
 }
 
 function createOption(value, label) {
@@ -264,7 +930,7 @@ function updateMapMarkers(stats) {
     if (!isInCameroon(area.latitude, area.longitude)) return;
     const marker = L.circleMarker([area.latitude, area.longitude], {
       radius: Math.max(6, Math.min(15, area.phone_rate / 7)),
-      fillColor: area.phone_rate >= 78 ? '#16a34a' : area.phone_rate >= 64 ? '#2563eb' : '#dc2626',
+      fillColor: area.phone_rate >= 78 ? '#2f855a' : area.phone_rate >= 64 ? '#2563eb' : '#b93826',
       color: '#fff',
       weight: 2,
       opacity: 1,
@@ -279,8 +945,7 @@ function updateMapMarkers(stats) {
       Confidence: ${Math.round(area.confidence * 100)}%
     `);
     marker.on('click', () => {
-      selectedArea = area;
-      renderAreaProfile();
+      selectArea(area, null);
     });
     marker.addTo(markersLayer);
     bounds.push([area.latitude, area.longitude]);
@@ -297,7 +962,7 @@ function updateMapMarkers(stats) {
     if (!isInCameroon(report.latitude, report.longitude)) return;
     const marker = L.circleMarker([report.latitude, report.longitude], {
       radius: 5,
-      fillColor: '#f97316',
+      fillColor: '#d59a28',
       color: '#fff',
       weight: 1,
       fillOpacity: 0.9,
@@ -310,13 +975,79 @@ function updateMapMarkers(stats) {
 }
 
 function renderAssets() {
-  document.getElementById('assets-list').innerHTML = assets.map(asset => `
-    <article class="list-card status-${escapeHtml(asset.status)}">
-      <div><strong>${escapeHtml(asset.name)}</strong><span>Asset #${asset.id} &middot; ${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.commune)}, ${escapeHtml(asset.department)}</span></div>
-      <span class="status-pill status-${escapeHtml(asset.status)}">${escapeHtml(asset.status)}</span>
-      <p>${escapeHtml(asset.notes || 'No notes')}</p>
-    </article>
-  `).join('');
+  renderSignalProbeHealth();
+  const rows = filteredAssets();
+  const target = document.getElementById('assets-list');
+  target.innerHTML = rows.length ? rows.map(asset => {
+    const context = assetContext(asset);
+    const health = context.health;
+    return `
+      <article class="probe-card status-${escapeHtml(asset.status)}">
+        <div>
+          <p class="eyebrow">${escapeHtml(asset.asset_type.replaceAll('_', ' '))}</p>
+          <strong>${escapeHtml(asset.name)}</strong>
+          <span>Asset #${asset.id} &middot; ${escapeHtml(asset.commune)}, ${escapeHtml(asset.department)} &middot; ${escapeHtml(asset.project_name || 'No project')}</span>
+        </div>
+        <div class="probe-health">
+          <span class="status-pill status-${escapeHtml(asset.status)}">${escapeHtml(asset.status)}</span>
+          <strong>${health ? health.health_score.toFixed(0) : '0'}</strong>
+          <small>${escapeHtml(health?.health_label || 'Not scored')}</small>
+        </div>
+        <p>${escapeHtml(health?.recommended_action || asset.notes || 'No action recommendation yet.')}</p>
+        <div class="probe-meta-grid">
+          <div><span>Alerts</span><strong>${context.assetAlerts.length}</strong></div>
+          <div><span>Tickets</span><strong>${context.assetTickets.length}</strong></div>
+          <div><span>Reports</span><strong>${context.assetReports.length}</strong></div>
+          <div><span>Readings</span><strong>${context.assetReadings.length}</strong></div>
+        </div>
+        <div class="ticket-actions">
+          <button class="btn btn-sm btn-outline-secondary asset-action" data-action="profile" data-id="${asset.id}"><i data-lucide="map-pin"></i> Area</button>
+          <button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}"><i data-lucide="activity"></i> Telemetry</button>
+          <button class="btn btn-sm btn-outline-secondary asset-action" data-action="alert" data-id="${asset.id}"><i data-lucide="triangle-alert"></i> Alert</button>
+          <button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}"><i data-lucide="wrench"></i> Ticket</button>
+          <button class="btn btn-sm btn-success asset-status-action" data-status="online" data-id="${asset.id}"><i data-lucide="check"></i> Online</button>
+          <button class="btn btn-sm btn-outline-secondary asset-status-action" data-status="warning" data-id="${asset.id}"><i data-lucide="circle-alert"></i> Watch</button>
+          <button class="btn btn-sm btn-outline-secondary asset-status-action" data-status="critical" data-id="${asset.id}"><i data-lucide="octagon-alert"></i> Critical</button>
+        </div>
+      </article>
+    `;
+  }).join('') : '<div class="empty-state">No signal probes match the current filters.</div>';
+
+  document.querySelectorAll('.asset-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const asset = assets.find(item => item.id === Number(button.dataset.id));
+      if (asset) prepareAssetAction(button.dataset.action, asset);
+    });
+  });
+  document.querySelectorAll('.asset-status-action').forEach(button => {
+    button.addEventListener('click', async () => {
+      const asset = assets.find(item => item.id === Number(button.dataset.id));
+      assets = await fetchJson(`/api/assets/${button.dataset.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: button.dataset.status,
+          notes: asset ? `${asset.name} marked ${button.dataset.status} from Signal Probes console.` : null,
+        }),
+      });
+      signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+      renderAssets();
+      updateView();
+      await refreshOverviewLayer();
+    });
+  });
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderSignalProbeHealth() {
+  const target = document.getElementById('signal-probe-health');
+  if (!target || !signalProbeDashboard) return;
+  target.innerHTML = `
+    <div class="metric-tile accent-blue featured-metric"><span>Total probes</span><strong>${signalProbeDashboard.total_probes}</strong><small>${signalProbeDashboard.online_probes} online across monitored sites</small></div>
+    <div class="metric-tile accent-green"><span>Healthy online</span><strong>${signalProbeDashboard.online_probes}</strong><small>Ready for continued monitoring</small></div>
+    <div class="metric-tile accent-gold"><span>Watch list</span><strong>${signalProbeDashboard.warning_probes}</strong><small>Need field or telemetry follow-up</small></div>
+    <div class="metric-tile accent-red"><span>Critical/offline</span><strong>${signalProbeDashboard.critical_probes + signalProbeDashboard.offline_probes}</strong><small>${signalProbeDashboard.open_alerts} open alerts / ${signalProbeDashboard.active_tickets} active tickets</small></div>
+  `;
 }
 
 function renderReports() {
@@ -345,9 +1076,12 @@ function renderAlerts() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'resolved' }),
       });
+      signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
       renderAlerts();
+      renderAssets();
       priorityZones = await fetchJson('/api/priority-zones');
       renderPriority();
+      await refreshOverviewLayer();
     });
   });
 
@@ -408,8 +1142,11 @@ function renderTickets() {
           resolution_notes: button.dataset.status === 'done' ? 'Marked complete from the operations console.' : null,
         }),
       });
+      signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
       renderTickets();
+      renderAssets();
       renderOverviewTickets();
+      await refreshOverviewLayer();
     });
   });
 
@@ -457,6 +1194,8 @@ function renderIot() {
 }
 
 function renderDecision(report) {
+  renderDecisionBoard();
+  renderExecutionBoard();
   document.getElementById('decision-report').innerHTML = `
     <div class="profile-grid-inner">
       <div class="metric-tile accent-blue"><span>Monitored assets</span><strong>${report.monitored_assets}</strong><small>${report.open_alerts} open alerts</small></div>
@@ -473,12 +1212,453 @@ function renderDecision(report) {
   `;
 }
 
+function renderDecisionBoard() {
+  const healthTarget = document.getElementById('decision-board-health');
+  const boardTarget = document.getElementById('decision-board');
+  if (!healthTarget || !boardTarget || !decisionBoard) return;
+  const totalBudget = decisionBoard.decisions.reduce((sum, decision) => sum + Number(decision.recommended_budget_xaf || 0), 0);
+  const averageEvidence = decisionBoard.decisions.length
+    ? decisionBoard.decisions.reduce((sum, decision) => sum + Number(decision.evidence_score || 0), 0) / decisionBoard.decisions.length
+    : 0;
+  const approved = decisionBoard.decisions.filter(decision => ['approved', 'executing', 'completed'].includes(decision.decision_stage)).length;
+  const blocked = decisionBoard.decisions.filter(decision => decision.decision_stage === 'blocked').length;
+
+  healthTarget.innerHTML = `
+    <div class="metric-tile accent-blue featured-metric"><span>Pipeline budget</span><strong>${compactMoneyXaf(totalBudget)}</strong><small>${decisionBoard.decisions.length} decisions tracked</small></div>
+    <div class="metric-tile accent-green"><span>Approved or executing</span><strong>${approved}</strong><small>Ready to become field work</small></div>
+    <div class="metric-tile accent-gold"><span>Evidence score</span><strong>${averageEvidence.toFixed(0)}</strong><small>Average proof readiness</small></div>
+    <div class="metric-tile accent-red"><span>Blocked</span><strong>${blocked}</strong><small>Need owner or proof intervention</small></div>
+  `;
+
+  const stageLabels = {
+    draft: 'Draft',
+    recommended: 'Recommended',
+    approved: 'Approved',
+    blocked: 'Blocked',
+    executing: 'Executing',
+    completed: 'Completed',
+  };
+  boardTarget.innerHTML = `
+    <div class="decision-recommendations">
+      ${(decisionBoard.recommendations || []).map(item => `<p>${escapeHtml(item)}</p>`).join('')}
+    </div>
+    <div class="decision-stage-grid">
+      ${(decisionBoard.stages || []).map(stage => {
+        const stageDecisions = decisionBoard.decisions.filter(decision => decision.decision_stage === stage.stage);
+        return `
+          <section class="decision-stage">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">${escapeHtml(stageLabels[stage.stage] || stage.stage)}</p>
+                <h2>${stage.count} decisions</h2>
+              </div>
+              <span class="status-pill">${compactMoneyXaf(stage.total_budget_xaf)}</span>
+            </div>
+            <div class="list-stack">
+              ${stageDecisions.length ? stageDecisions.map(renderDecisionCard).join('') : '<div class="empty-state">No decisions in this stage.</div>'}
+            </div>
+          </section>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  document.querySelectorAll('.decision-stage-action').forEach(button => {
+    button.addEventListener('click', async () => {
+      decisionBoard = await fetchJson(`/api/decision-snapshots/${button.dataset.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision_stage: button.dataset.stage,
+          approval_notes: `Moved to ${button.dataset.stage} from decision board.`,
+        }),
+      });
+      decisionSnapshots = decisionBoard.decisions;
+      renderDecisionBoard();
+      renderWorkspaces();
+      await refreshOverviewLayer();
+    });
+  });
+  document.querySelectorAll('.decision-plan-action').forEach(button => {
+    button.addEventListener('click', async () => {
+      executionBoard = await fetchJson(`/api/decision-snapshots/${button.dataset.id}/execution-plan`, {
+        method: 'POST',
+      });
+      decisionBoard = await fetchJson('/api/decision-board');
+      renderDecisionBoard();
+      renderExecutionBoard();
+      await refreshOverviewLayer();
+    });
+  });
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderDecisionCard(decision) {
+  const evidence = Number(decision.evidence_score || 0);
+  const risk = decision.risk_level || 'medium';
+  return `
+    <article class="decision-card priority-${escapeHtml(risk === 'high' ? 'high' : risk === 'low' ? 'watch' : 'medium')}">
+      <div>
+        <strong>${escapeHtml(decision.title)}</strong>
+        <span>${escapeHtml(decision.project_name || 'No project')} &middot; ${escapeHtml(decision.site_name || decision.asset_name || 'No proof link')}</span>
+      </div>
+      <span class="priority-badge priority-${escapeHtml(risk === 'high' ? 'high' : risk === 'low' ? 'watch' : 'medium')}">${escapeHtml(risk)}</span>
+      <p>${escapeHtml(decision.rationale)} Next: ${escapeHtml(decision.next_action)}</p>
+      <div class="workspace-progress"><span style="width:${Math.max(0, Math.min(100, evidence))}%"></span></div>
+      <div class="probe-meta-grid">
+        <div><span>Evidence</span><strong>${evidence.toFixed(0)}</strong></div>
+        <div><span>Priority</span><strong>${Number(decision.priority_score || 0).toFixed(0)}</strong></div>
+        <div><span>Budget</span><strong>${compactMoneyXaf(decision.recommended_budget_xaf || 0)}</strong></div>
+        <div><span>Owner</span><strong>${escapeHtml(decision.owner_name || 'Unset')}</strong></div>
+      </div>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="recommended">Recommend</button>
+        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="approved">Approve</button>
+        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="executing">Execute</button>
+        <button class="btn btn-sm btn-success decision-stage-action" data-id="${decision.id}" data-stage="completed">Complete</button>
+        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="blocked">Block</button>
+        <button class="btn btn-sm btn-outline-secondary decision-plan-action" data-id="${decision.id}"><i data-lucide="list-checks"></i> Plan</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderExecutionBoard() {
+  const healthTarget = document.getElementById('execution-board-health');
+  const boardTarget = document.getElementById('execution-board');
+  if (!healthTarget || !boardTarget || !executionBoard) return;
+  const totalBudget = executionBoard.plans.reduce((sum, plan) => sum + Number(plan.budget_xaf || 0), 0);
+  const inMotion = executionBoard.plans.filter(plan => ['ready', 'in_progress'].includes(plan.status)).length;
+  const blocked = executionBoard.plans.filter(plan => plan.status === 'blocked').length;
+  const avgChecklist = executionBoard.plans.length
+    ? executionBoard.plans.reduce((sum, plan) => sum + planChecklistCompletion(plan), 0) / executionBoard.plans.length
+    : 0;
+
+  healthTarget.innerHTML = `
+    <div class="metric-tile accent-blue featured-metric"><span>Execution budget</span><strong>${compactMoneyXaf(totalBudget)}</strong><small>${executionBoard.plans.length} execution plans</small></div>
+    <div class="metric-tile accent-green"><span>Ready/in progress</span><strong>${inMotion}</strong><small>Field work can move</small></div>
+    <div class="metric-tile accent-gold"><span>Checklist completion</span><strong>${avgChecklist.toFixed(0)}%</strong><small>Cameroon readiness controls</small></div>
+    <div class="metric-tile accent-red"><span>Blocked</span><strong>${blocked}</strong><small>Need owner intervention</small></div>
+  `;
+
+  const statusLabels = {
+    planned: 'Planned',
+    ready: 'Ready',
+    in_progress: 'In progress',
+    blocked: 'Blocked',
+    completed: 'Completed',
+  };
+  boardTarget.innerHTML = `
+    <div class="decision-recommendations">
+      ${(executionBoard.recommendations || []).map(item => `<p>${escapeHtml(item)}</p>`).join('')}
+    </div>
+    <div class="decision-stage-grid execution-stage-grid">
+      ${(executionBoard.stages || []).map(stage => {
+        const plans = executionBoard.plans.filter(plan => plan.status === stage.status);
+        return `
+          <section class="decision-stage">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">${escapeHtml(statusLabels[stage.status] || stage.status)}</p>
+                <h2>${stage.count} plans</h2>
+              </div>
+              <span class="status-pill">${stage.checklist_completion.toFixed(0)}%</span>
+            </div>
+            <div class="list-stack">
+              ${plans.length ? plans.map(renderExecutionPlanCard).join('') : '<div class="empty-state">No execution plans in this stage.</div>'}
+            </div>
+          </section>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  document.querySelectorAll('.execution-status-action').forEach(button => {
+    button.addEventListener('click', async () => {
+      executionBoard = await fetchJson(`/api/execution-plans/${button.dataset.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: button.dataset.status,
+          local_focal_point_confirmed: ['ready', 'in_progress', 'completed'].includes(button.dataset.status),
+          offline_survey_ready: ['ready', 'in_progress', 'completed'].includes(button.dataset.status),
+          xaf_budget_approved: ['ready', 'in_progress', 'completed'].includes(button.dataset.status),
+          blocker: button.dataset.status === 'blocked' ? 'Blocked from execution board.' : null,
+          outcome_notes: button.dataset.status === 'completed' ? 'Marked completed from execution board.' : null,
+        }),
+      });
+      renderExecutionBoard();
+    });
+  });
+  if (window.lucide) lucide.createIcons();
+}
+
+function planChecklistCompletion(plan) {
+  const checks = [
+    plan.local_focal_point_confirmed,
+    plan.gps_photo_proof_required,
+    plan.offline_survey_ready,
+    plan.bilingual_script_ready,
+    plan.xaf_budget_approved,
+  ];
+  return (checks.filter(Boolean).length / checks.length) * 100;
+}
+
+function renderExecutionPlanCard(plan) {
+  const completion = planChecklistCompletion(plan);
+  return `
+    <article class="decision-card priority-${plan.status === 'blocked' ? 'high' : plan.status === 'completed' ? 'watch' : 'medium'}">
+      <div>
+        <strong>${escapeHtml(plan.title)}</strong>
+        <span>${escapeHtml(plan.project_name || 'No project')} &middot; ${escapeHtml(plan.site_name || plan.asset_name || plan.decision_title || 'No linked proof')}</span>
+      </div>
+      <span class="priority-badge priority-${plan.status === 'blocked' ? 'high' : plan.status === 'completed' ? 'watch' : 'medium'}">${escapeHtml(plan.status)}</span>
+      <p>${escapeHtml(plan.transport_access_notes || plan.blocker || 'Confirm local access and field readiness.')}</p>
+      <div class="workspace-progress"><span style="width:${completion}%"></span></div>
+      <div class="probe-meta-grid">
+        <div><span>Checklist</span><strong>${completion.toFixed(0)}%</strong></div>
+        <div><span>Budget</span><strong>${compactMoneyXaf(plan.budget_xaf || 0)}</strong></div>
+        <div><span>Owner</span><strong>${escapeHtml(plan.owner_name || 'Unset')}</strong></div>
+        <div><span>Dates</span><strong>${escapeHtml(plan.planned_start || 'TBD')}</strong></div>
+      </div>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary execution-status-action" data-id="${plan.id}" data-status="ready">Ready</button>
+        <button class="btn btn-sm btn-outline-secondary execution-status-action" data-id="${plan.id}" data-status="in_progress">Start</button>
+        <button class="btn btn-sm btn-outline-secondary execution-status-action" data-id="${plan.id}" data-status="blocked">Block</button>
+        <button class="btn btn-sm btn-success execution-status-action" data-id="${plan.id}" data-status="completed">Complete</button>
+      </div>
+    </article>
+  `;
+}
+
+function prepareProjectAction(action, project) {
+  if (!project) return;
+  switchView('workspaces');
+  if (action === 'site') {
+    document.getElementById('siteProject').value = project.id;
+    document.getElementById('siteRegion').value = project.region || '';
+    document.getElementById('siteName').focus();
+  }
+  if (action === 'campaign') {
+    document.getElementById('campaignProject').value = project.id;
+    document.getElementById('campaignRegion').value = project.region || '';
+    document.getElementById('campaignName').focus();
+  }
+  if (action === 'decision') {
+    document.getElementById('decisionProject').value = project.id;
+    document.getElementById('decisionTitle').value = `${project.name} decision`;
+    document.getElementById('decisionTitle').focus();
+  }
+}
+
+function applyWorkspaceTemplate(templateId) {
+  const template = workspaceTemplates.find(item => item.id === templateId);
+  if (!template) return;
+  const focusRegion = regionFilter.value !== 'all' ? regionFilter.value : '';
+  const focusArea = selectedArea || currentMatrixRows[0] || allStats[0];
+
+  document.getElementById('organizationType').value = template.orgType;
+  document.getElementById('organizationName').value = `${template.title} client`;
+  document.getElementById('organizationContactName').value = 'Field operations lead';
+
+  document.getElementById('projectName').value = template.projectName;
+  document.getElementById('projectSector').value = template.sector;
+  document.getElementById('projectRegion').value = focusArea?.region || focusRegion;
+  document.getElementById('projectStatus').value = 'planning';
+
+  document.getElementById('siteName').value = focusArea ? `${focusArea.commune} ${template.siteName}` : template.siteName;
+  document.getElementById('siteType').value = template.siteType;
+  document.getElementById('siteRegion').value = focusArea?.region || focusRegion;
+  document.getElementById('siteDepartment').value = focusArea?.department || '';
+  document.getElementById('siteCommune').value = focusArea?.commune || '';
+  document.getElementById('siteLatitude').value = focusArea ? formatCoordinate(focusArea.latitude) : '';
+  document.getElementById('siteLongitude').value = focusArea ? formatCoordinate(focusArea.longitude) : '';
+  document.getElementById('siteBeneficiaries').value = focusArea?.population || '';
+  document.getElementById('siteTrustSignal').value = template.trustSignal;
+  document.getElementById('siteAccessNotes').value = focusArea
+    ? `Use local trusted contact and collect GPS/photo proof for ${focusArea.commune}.`
+    : 'Use local trusted contact and collect GPS/photo proof.';
+
+  document.getElementById('campaignName').value = focusArea ? `${focusArea.commune} ${template.campaignName}` : template.campaignName;
+  document.getElementById('campaignFormType').value = template.formType;
+  document.getElementById('campaignRegion').value = focusArea?.region || focusRegion;
+  document.getElementById('campaignDepartment').value = focusArea?.department || '';
+  document.getElementById('campaignCommune').value = focusArea?.commune || '';
+  document.getElementById('campaignLanguage').value = 'bilingual';
+  document.getElementById('campaignStatus').value = 'draft';
+  document.getElementById('campaignOffline').checked = true;
+
+  document.getElementById('decisionTitle').value = focusArea ? `${focusArea.commune}: ${template.decisionTitle}` : template.decisionTitle;
+  document.getElementById('decisionStage').value = 'recommended';
+  document.getElementById('decisionScore').value = focusArea ? (priorityForArea(focusArea)?.priority_score || 50).toFixed(0) : '';
+  document.getElementById('decisionBudget').value = focusArea ? estimateBudgetXaf(focusArea) : '';
+  document.getElementById('decisionOwner').value = 'Field operations lead';
+  document.getElementById('decisionEvidence').value = focusArea ? Math.round(focusArea.confidence * 55) : '';
+  document.getElementById('decisionRationale').value = focusArea ? `${template.rationale} ${focusArea.commune} adds ${formatNumber(focusArea.population)} people and ${formatRate(focusArea.phone_rate)} estimated phone ownership.` : template.rationale;
+  document.getElementById('decisionNextAction').value = focusArea ? areaActionText(focusArea, localContextForArea(focusArea)) : 'Validate site, launch campaign, then approve first execution sprint.';
+  document.getElementById('organizationName').focus();
+}
+
+function prepareAreaAction(action, area) {
+  const project = projects.find(item => item.region === area.region) || projects[0];
+  if (action === 'probe') {
+    switchView('assets');
+    document.getElementById('assetProject').value = project?.id || '';
+    document.getElementById('assetSite').value = sites.find(site => areaKey(site) === areaKey(area))?.id || '';
+    document.getElementById('assetName').value = `${area.commune} signal probe`;
+    document.getElementById('assetType').value = 'connectivity_probe';
+    document.getElementById('assetRegion').value = area.region;
+    document.getElementById('assetDepartment').value = area.department;
+    document.getElementById('assetCommune').value = area.commune;
+    document.getElementById('assetLatitude').value = formatCoordinate(area.latitude);
+    document.getElementById('assetLongitude').value = formatCoordinate(area.longitude);
+    document.getElementById('assetStatus').value = area.confidence < 0.68 ? 'warning' : 'online';
+    document.getElementById('assetOperator').value = project?.organization_name || 'Local field team';
+    document.getElementById('assetNotes').value = `Probe planned from area profile: ${area.commune}, ${formatRate(area.phone_rate)} ownership, ${Math.round(area.confidence * 100)}% confidence.`;
+    document.getElementById('assetName').focus();
+    return;
+  }
+
+  switchView('workspaces');
+  if (action === 'site') {
+    document.getElementById('siteProject').value = project?.id || '';
+    document.getElementById('siteName').value = `${area.commune} field site`;
+    document.getElementById('siteRegion').value = area.region;
+    document.getElementById('siteDepartment').value = area.department;
+    document.getElementById('siteCommune').value = area.commune;
+    document.getElementById('siteLatitude').value = formatCoordinate(area.latitude);
+    document.getElementById('siteLongitude').value = formatCoordinate(area.longitude);
+    document.getElementById('siteBeneficiaries').value = area.population;
+    document.getElementById('siteAccessNotes').value = `Validate local access, trusted focal point, and GPS/photo proof for ${area.commune}.`;
+    document.getElementById('siteName').focus();
+  }
+  if (action === 'campaign') {
+    document.getElementById('campaignProject').value = project?.id || '';
+    document.getElementById('campaignName').value = `${area.commune} phone access validation`;
+    document.getElementById('campaignRegion').value = area.region;
+    document.getElementById('campaignDepartment').value = area.department;
+    document.getElementById('campaignCommune').value = area.commune;
+    document.getElementById('campaignFormType').value = area.phone_rate < 65 ? 'phone_ownership_baseline' : 'gps_photo_survey';
+    document.getElementById('campaignStatus').value = 'draft';
+    document.getElementById('campaignOffline').checked = true;
+    document.getElementById('campaignName').focus();
+  }
+  if (action === 'decision') {
+    const priority = priorityForArea(area);
+    document.getElementById('decisionProject').value = project?.id || '';
+    document.getElementById('decisionTitle').value = `${area.commune} validation decision`;
+    document.getElementById('decisionStage').value = 'recommended';
+    document.getElementById('decisionScore').value = priority ? priority.priority_score.toFixed(0) : '';
+    document.getElementById('decisionBudget').value = estimateBudgetXaf(area, localContextForArea(area));
+    document.getElementById('decisionOwner').value = project?.organization_name || 'Field operations lead';
+    document.getElementById('decisionEvidence').value = Math.round((area.confidence * 45) + (localContextForArea(area).localSites.length ? 25 : 0) + (localContextForArea(area).localAssets.length ? 20 : 0));
+    document.getElementById('decisionRationale').value = `${area.commune} has ${formatNumber(area.population)} people, ${formatRate(area.phone_rate)} estimated ownership, and ${Math.round(area.confidence * 100)}% confidence.`;
+    document.getElementById('decisionNextAction').value = areaActionText(area, localContextForArea(area));
+    document.getElementById('decisionTitle').focus();
+  }
+}
+
+function prepareAssetAction(action, asset) {
+  const area = assetArea(asset);
+  const context = assetContext(asset);
+  if (action === 'profile' && area) {
+    selectArea(area);
+    return;
+  }
+  if (action === 'telemetry') {
+    const readingValue = asset.status === 'online' ? 82 : asset.status === 'warning' ? 54 : 18;
+    fetchJson('/api/iot/readings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: asset.project_id,
+        site_profile_id: asset.site_profile_id,
+        asset_id: asset.id,
+        reading_type: asset.asset_type === 'connectivity_probe' ? 'signal_quality' : 'asset_health',
+        value: readingValue,
+        unit: asset.asset_type === 'connectivity_probe' ? 'score' : 'percent',
+        latitude: asset.latitude,
+        longitude: asset.longitude,
+      }),
+    }).then(async data => {
+      readings = data;
+      signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+      renderIot();
+      renderAssets();
+      setStatus(document.getElementById('asset-status'), `Telemetry logged for ${asset.name}.`, 'success');
+    }).catch(error => setStatus(document.getElementById('asset-status'), error.message, 'danger'));
+    return;
+  }
+  if (action === 'alert') {
+    fetchJson('/api/alerts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: asset.project_id,
+        site_profile_id: asset.site_profile_id,
+        asset_id: asset.id,
+        severity: asset.status === 'critical' || asset.status === 'offline' ? 'critical' : 'warning',
+        title: `${asset.name} validation required`,
+        message: `${asset.commune} probe needs field validation. ${context.health?.recommended_action || 'Review telemetry and local proof.'}`,
+      }),
+    }).then(async data => {
+      alerts = data;
+      priorityZones = await fetchJson('/api/priority-zones');
+      signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+      renderAlerts();
+      renderPriority();
+      renderAssets();
+      updateView();
+      await refreshOverviewLayer();
+      setStatus(document.getElementById('asset-status'), `Alert created for ${asset.name}.`, 'success');
+    }).catch(error => setStatus(document.getElementById('asset-status'), error.message, 'danger'));
+    return;
+  }
+  if (action === 'ticket') {
+    switchView('tickets');
+    document.getElementById('ticketAssetId').value = asset.id;
+    document.getElementById('ticketTitle').value = `${asset.name} field follow-up`;
+    document.getElementById('ticketPriority').value = asset.status === 'critical' || asset.status === 'offline' ? 'urgent' : 'high';
+    document.getElementById('ticketAssignedTo').value = asset.operator || 'Local technician';
+    document.getElementById('ticketTitle').focus();
+  }
+}
+
+function exportCurrentMatrixCsv() {
+  const rows = currentMatrixRows.length ? currentMatrixRows : filteredStats();
+  const header = ['pcode', 'region', 'department', 'arrondissement', 'latitude', 'longitude', 'population', 'phone_owners', 'phone_rate', 'confidence', 'priority_score'];
+  const csvRows = rows.map(area => {
+    const priority = priorityForArea(area);
+    return [
+      area.pcode || '',
+      area.region,
+      area.department,
+      area.commune,
+      area.latitude,
+      area.longitude,
+      area.population,
+      area.phone_owners,
+      area.phone_rate.toFixed(2),
+      area.confidence.toFixed(3),
+      priority ? priority.priority_score.toFixed(2) : '0',
+    ].map(value => `"${String(value).replaceAll('"', '""')}"`).join(',');
+  });
+  const blob = new Blob([[header.join(','), ...csvRows].join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'infrapulse-filtered-phone-matrix.csv';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function updateView() {
   const stats = filteredStats();
   renderRegions(stats);
   updateMapMarkers(stats);
   selectedArea = stats[0] || selectedArea;
   renderAreaProfile();
+  if (selectedArea) loadAreaDossier(selectedArea);
 }
 
 function initMap() {
@@ -496,12 +1676,20 @@ async function refreshData() {
   refreshButton.disabled = true;
   setStatus(dataStatus, 'Loading InfraPulse intelligence layers...', 'info');
   try {
-    const [summary, stats, orgData, projectData, assetData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
+    const [summary, overviewData, stats, workspaceData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
       fetchJson('/api/summary'),
+      fetchJson('/api/overview'),
       fetchJson('/api/stats'),
+      fetchJson('/api/workspaces/dashboard'),
       fetchJson('/api/organizations'),
       fetchJson('/api/projects'),
+      fetchJson('/api/site-profiles'),
+      fetchJson('/api/survey-campaigns'),
+      fetchJson('/api/decision-snapshots'),
+      fetchJson('/api/decision-board'),
+      fetchJson('/api/execution-board'),
       fetchJson('/api/assets'),
+      fetchJson('/api/signal-probes/dashboard'),
       fetchJson('/api/reports'),
       fetchJson('/api/alerts'),
       fetchJson('/api/tickets'),
@@ -510,15 +1698,25 @@ async function refreshData() {
       fetchJson('/api/decision-report'),
     ]);
     allStats = stats;
+    nationalSummary = summary;
+    overviewIntelligence = overviewData;
+    workspaceDashboard = workspaceData;
     organizations = orgData;
     projects = projectData;
+    sites = siteData;
+    campaigns = campaignData;
+    decisionSnapshots = snapshotData;
+    decisionBoard = decisionBoardData;
+    executionBoard = executionBoardData;
     assets = assetData;
+    signalProbeDashboard = probeData;
     reports = reportData;
     alerts = alertData;
     tickets = ticketData;
     readings = readingData;
     priorityZones = priorityData;
-    renderSummary(summary);
+    renderSummary(summary, overviewData);
+    renderOverviewIntelligence();
     buildFilterOptions();
     renderWorkspaces();
     renderAssets();
@@ -554,13 +1752,19 @@ function payloadFrom(prefix) {
 document.getElementById('asset-form').addEventListener('submit', async event => {
   event.preventDefault();
   const payload = payloadFrom('asset');
+  payload.project_id = document.getElementById('assetProject').value ? Number(document.getElementById('assetProject').value) : null;
+  payload.site_profile_id = document.getElementById('assetSite').value ? Number(document.getElementById('assetSite').value) : null;
   payload.operator = document.getElementById('assetOperator').value.trim() || null;
   payload.installed_at = document.getElementById('assetInstalledAt').value || null;
   payload.notes = document.getElementById('assetNotes').value.trim() || null;
   try {
     assets = await fetchJson('/api/assets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+    workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
     renderAssets();
+    renderWorkspaces();
     updateView();
+    await refreshOverviewLayer();
     setStatus(document.getElementById('asset-status'), 'Asset saved.', 'success');
     event.target.reset();
   } catch (error) {
@@ -570,7 +1774,10 @@ document.getElementById('asset-form').addEventListener('submit', async event => 
 
 document.getElementById('report-form').addEventListener('submit', async event => {
   event.preventDefault();
+  const reportAsset = assets.find(asset => asset.id === Number(document.getElementById('reportAssetId').value));
   const payload = {
+    project_id: reportAsset?.project_id || null,
+    site_profile_id: reportAsset?.site_profile_id || null,
     asset_id: document.getElementById('reportAssetId').value ? Number(document.getElementById('reportAssetId').value) : null,
     report_type: document.getElementById('reportType').value.trim(),
     region: document.getElementById('reportRegion').value.trim(),
@@ -579,12 +1786,15 @@ document.getElementById('report-form').addEventListener('submit', async event =>
     latitude: Number(document.getElementById('reportLatitude').value),
     longitude: Number(document.getElementById('reportLongitude').value),
     status: document.getElementById('reportStatus').value,
+    evidence_quality: 'gps_photo_verified',
     notes: document.getElementById('reportNotes').value.trim(),
     submitted_by: document.getElementById('reportSubmittedBy').value.trim(),
   };
   try {
     reports = await fetchJson('/api/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
     renderReports();
+    renderAssets();
     updateView();
     setStatus(document.getElementById('report-status'), 'Report submitted.', 'success');
     event.target.reset();
@@ -639,9 +1849,95 @@ document.getElementById('project-form').addEventListener('submit', async event =
   }
 });
 
-document.getElementById('ticket-form').addEventListener('submit', async event => {
+document.getElementById('site-form').addEventListener('submit', async event => {
   event.preventDefault();
   const payload = {
+    project_id: document.getElementById('siteProject').value ? Number(document.getElementById('siteProject').value) : null,
+    name: document.getElementById('siteName').value.trim(),
+    site_type: document.getElementById('siteType').value,
+    region: document.getElementById('siteRegion').value.trim(),
+    department: document.getElementById('siteDepartment').value.trim(),
+    commune: document.getElementById('siteCommune').value.trim(),
+    latitude: Number(document.getElementById('siteLatitude').value),
+    longitude: Number(document.getElementById('siteLongitude').value),
+    beneficiary_estimate: document.getElementById('siteBeneficiaries').value ? Number(document.getElementById('siteBeneficiaries').value) : null,
+    trust_signal: document.getElementById('siteTrustSignal').value,
+    access_notes: document.getElementById('siteAccessNotes').value.trim() || null,
+  };
+  try {
+    sites = await fetchJson('/api/site-profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
+    await refreshOverviewLayer();
+    renderWorkspaces();
+    setStatus(document.getElementById('site-status'), 'Site profile saved.', 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('site-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('campaign-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const payload = {
+    project_id: document.getElementById('campaignProject').value ? Number(document.getElementById('campaignProject').value) : null,
+    name: document.getElementById('campaignName').value.trim(),
+    form_type: document.getElementById('campaignFormType').value,
+    target_region: document.getElementById('campaignRegion').value.trim() || null,
+    target_department: document.getElementById('campaignDepartment').value.trim() || null,
+    target_commune: document.getElementById('campaignCommune').value.trim() || null,
+    status: document.getElementById('campaignStatus').value,
+    language_mode: document.getElementById('campaignLanguage').value,
+    offline_enabled: document.getElementById('campaignOffline').checked,
+    starts_on: document.getElementById('campaignStartsOn').value || null,
+    ends_on: document.getElementById('campaignEndsOn').value || null,
+  };
+  try {
+    campaigns = await fetchJson('/api/survey-campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
+    await refreshOverviewLayer();
+    renderWorkspaces();
+    setStatus(document.getElementById('campaign-status'), 'Survey campaign saved.', 'success');
+    event.target.reset();
+    document.getElementById('campaignOffline').checked = true;
+  } catch (error) {
+    setStatus(document.getElementById('campaign-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('decision-snapshot-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const payload = {
+    project_id: document.getElementById('decisionProject').value ? Number(document.getElementById('decisionProject').value) : null,
+    title: document.getElementById('decisionTitle').value.trim(),
+    decision_stage: document.getElementById('decisionStage').value,
+    priority_score: document.getElementById('decisionScore').value ? Number(document.getElementById('decisionScore').value) : null,
+    recommended_budget_xaf: document.getElementById('decisionBudget').value ? Number(document.getElementById('decisionBudget').value) : null,
+    owner_name: document.getElementById('decisionOwner').value.trim() || null,
+    risk_level: document.getElementById('decisionRisk').value || null,
+    evidence_score: document.getElementById('decisionEvidence').value ? Number(document.getElementById('decisionEvidence').value) : null,
+    rationale: document.getElementById('decisionRationale').value.trim() || null,
+    next_action: document.getElementById('decisionNextAction').value.trim() || null,
+  };
+  try {
+    decisionSnapshots = await fetchJson('/api/decision-snapshots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    decisionBoard = await fetchJson('/api/decision-board');
+    workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
+    await refreshOverviewLayer();
+    renderWorkspaces();
+    renderDecisionBoard();
+    setStatus(document.getElementById('decision-snapshot-status'), 'Decision snapshot saved.', 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('decision-snapshot-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('ticket-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const ticketAsset = assets.find(asset => asset.id === Number(document.getElementById('ticketAssetId').value));
+  const payload = {
+    project_id: ticketAsset?.project_id || null,
+    site_profile_id: ticketAsset?.site_profile_id || null,
     asset_id: document.getElementById('ticketAssetId').value ? Number(document.getElementById('ticketAssetId').value) : null,
     alert_id: document.getElementById('ticketAlertId').value ? Number(document.getElementById('ticketAlertId').value) : null,
     title: document.getElementById('ticketTitle').value.trim(),
@@ -655,7 +1951,10 @@ document.getElementById('ticket-form').addEventListener('submit', async event =>
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
     renderTickets();
+    renderAssets();
+    await refreshOverviewLayer();
     setStatus(document.getElementById('ticket-status'), 'Ticket created.', 'success');
     event.target.reset();
   } catch (error) {
@@ -667,8 +1966,18 @@ document.querySelectorAll('.tab-button').forEach(button => {
   button.addEventListener('click', () => switchView(button.dataset.view));
 });
 
+if (window.lucide) lucide.createIcons();
 refreshButton.addEventListener('click', refreshData);
 regionFilter.addEventListener('change', () => { buildFilterOptions(); updateView(); });
 departmentFilter.addEventListener('change', () => { buildFilterOptions(); updateView(); });
 communeFilter.addEventListener('change', updateView);
+[matrixSearch, matrixSort, matrixOwnershipFilter, matrixConfidenceFilter].forEach(control => {
+  control?.addEventListener('input', updateView);
+  control?.addEventListener('change', updateView);
+});
+[assetSearch, assetStatusFilter, assetTypeFilter].forEach(control => {
+  control?.addEventListener('input', renderAssets);
+  control?.addEventListener('change', renderAssets);
+});
+matrixExportButton?.addEventListener('click', exportCurrentMatrixCsv);
 window.addEventListener('load', () => { initMap(); refreshData(); });

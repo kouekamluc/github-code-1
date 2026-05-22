@@ -52,8 +52,13 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/cameroon_stats
 ## Endpoints
 
 - `GET /api/summary` - national totals and hierarchy counts
+- `GET /api/overview` - Rust-computed business cockpit with KPIs, opportunity pipeline, trust risks, and next actions
 - `GET /api/stats` - detailed dataset by region/department/commune
 - `POST /api/stats/update` - insert or update a location record
+- `GET /api/workspaces/dashboard` - workspace health, projects, sites, campaigns, and recent decisions
+- `GET|POST /api/site-profiles` - physical field sites linked to projects
+- `GET|POST /api/survey-campaigns` - offline-first GPS/photo survey campaign planning
+- `GET|POST /api/decision-snapshots` - decision records with score, budget, rationale, and next action
 
 ## Frontend
 

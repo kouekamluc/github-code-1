@@ -181,7 +181,7 @@ pub(crate) async fn seed_operational_demo(pool: &PgPool) -> Result<(), sqlx::Err
             9.3014,
             13.3977,
             "online",
-            "InfraPulse field team",
+            "KK Evo field team",
             "2025-01-10",
             "Measures evening mobile signal quality.",
         ),

@@ -14,6 +14,7 @@ pub(crate) struct DbLocation {
     pub(crate) phone_owners: Option<i64>,
     pub(crate) population: Option<i64>,
     pub(crate) data_source: String,
+    pub(crate) updated_at: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -33,6 +34,7 @@ pub(crate) struct LocationStat {
     pub(crate) confidence: f64,
     pub(crate) urban_signal: f64,
     pub(crate) data_source: String,
+    pub(crate) updated_at: String,
 }
 
 #[derive(Serialize)]
@@ -52,7 +54,7 @@ pub(crate) struct Summary {
     pub(crate) estimated_location_count: i64,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromRow, Clone)]
 pub(crate) struct Organization {
     pub(crate) id: i64,
     pub(crate) name: String,
@@ -70,7 +72,7 @@ pub(crate) struct OrganizationRequest {
     pub(crate) contact_email: Option<String>,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromRow, Clone)]
 pub(crate) struct Project {
     pub(crate) id: i64,
     pub(crate) organization_id: Option<i64>,
@@ -484,7 +486,12 @@ pub(crate) struct SurveyCampaignRequest {
     pub(crate) ends_on: Option<String>,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Deserialize)]
+pub(crate) struct SurveyCampaignStatusRequest {
+    pub(crate) status: String,
+}
+
+#[derive(Serialize, FromRow, Clone)]
 pub(crate) struct DecisionSnapshot {
     pub(crate) id: i64,
     pub(crate) project_id: Option<i64>,
@@ -603,27 +610,213 @@ pub(crate) struct ExecutionBoard {
     pub(crate) recommendations: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub(crate) struct WorkspaceHealth {
     pub(crate) organizations: i64,
     pub(crate) projects: i64,
+    pub(crate) active_projects: i64,
     pub(crate) sites: i64,
     pub(crate) campaigns: i64,
     pub(crate) monitored_assets: i64,
+    pub(crate) linked_iot_readings: i64,
+    pub(crate) reports_generated: i64,
     pub(crate) open_alerts: i64,
     pub(crate) active_tickets: i64,
     pub(crate) decision_snapshots: i64,
+    pub(crate) priority_opportunities: i64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WorkspaceBusinessCard {
+    pub(crate) label: String,
+    pub(crate) value: String,
+    pub(crate) detail: String,
+    pub(crate) tone: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct OrganizationIntelligence {
+    pub(crate) organization: Organization,
+    pub(crate) project_count: i64,
+    pub(crate) linked_site_count: i64,
+    pub(crate) active_decision_count: i64,
+    pub(crate) open_alert_count: i64,
+    pub(crate) last_activity: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ProjectIntelligence {
+    pub(crate) project: Project,
+    pub(crate) site_count: i64,
+    pub(crate) campaign_count: i64,
+    pub(crate) decision_count: i64,
+    pub(crate) asset_count: i64,
+    pub(crate) open_ticket_count: i64,
+    pub(crate) execution_readiness: f64,
+    pub(crate) recommended_next_action: String,
+    pub(crate) latest_activity: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SiteProfileIntelligence {
+    pub(crate) site: SiteProfile,
+    pub(crate) linked_assets: i64,
+    pub(crate) linked_reports: i64,
+    pub(crate) linked_alerts: i64,
+    pub(crate) linked_tickets: i64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CampaignIntelligence {
+    pub(crate) campaign: SurveyCampaign,
+    pub(crate) submitted_reports: i64,
+    pub(crate) field_validation_purpose: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WorkspaceActivity {
+    pub(crate) action: String,
+    pub(crate) related_entity: String,
+    pub(crate) timestamp: String,
+    pub(crate) source: String,
+    pub(crate) description: String,
 }
 
 #[derive(Serialize)]
 pub(crate) struct WorkspaceDashboard {
     pub(crate) health: WorkspaceHealth,
+    pub(crate) business_cards: Vec<WorkspaceBusinessCard>,
     pub(crate) organizations: Vec<Organization>,
+    pub(crate) organization_intelligence: Vec<OrganizationIntelligence>,
     pub(crate) projects: Vec<Project>,
+    pub(crate) project_intelligence: Vec<ProjectIntelligence>,
     pub(crate) sites: Vec<SiteProfile>,
+    pub(crate) site_intelligence: Vec<SiteProfileIntelligence>,
     pub(crate) campaigns: Vec<SurveyCampaign>,
+    pub(crate) campaign_intelligence: Vec<CampaignIntelligence>,
     pub(crate) recent_decisions: Vec<DecisionSnapshot>,
+    pub(crate) activity: Vec<WorkspaceActivity>,
     pub(crate) market_realities: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct PhoneMatrixAssumptions {
+    pub(crate) adult_share: f64,
+    pub(crate) national_adult_phone_ownership: f64,
+    pub(crate) mobile_subscriptions_per_person: f64,
+    pub(crate) priority_population_weight: f64,
+    pub(crate) priority_gap_weight: f64,
+    pub(crate) priority_confidence_weight: f64,
+    pub(crate) priority_alert_weight: f64,
+    pub(crate) assumption_version: String,
+    pub(crate) last_updated: String,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct PhoneMatrixBreakdown {
+    pub(crate) population: i64,
+    pub(crate) adult_share: f64,
+    pub(crate) adult_ownership_rate: f64,
+    pub(crate) regional_factor: f64,
+    pub(crate) urban_rural_factor: f64,
+    pub(crate) estimated_phone_owners_formula: String,
+    pub(crate) maximum_owners_allowed: i64,
+    pub(crate) confidence_level: String,
+    pub(crate) confidence_reason: String,
+    pub(crate) data_source: String,
+}
+
+#[derive(Serialize, Clone)]
+pub(crate) struct PhoneMatrixRow {
+    pub(crate) pcode: Option<String>,
+    pub(crate) region: String,
+    pub(crate) department: String,
+    pub(crate) commune: String,
+    pub(crate) location: String,
+    pub(crate) latitude: f64,
+    pub(crate) longitude: f64,
+    pub(crate) area_sqkm: Option<f64>,
+    pub(crate) population: i64,
+    pub(crate) estimated_phone_owners: i64,
+    pub(crate) estimated_mobile_subscriptions: i64,
+    pub(crate) ownership_rate: f64,
+    pub(crate) confidence: f64,
+    pub(crate) confidence_level: String,
+    pub(crate) confidence_reason: String,
+    pub(crate) opportunity_score: f64,
+    pub(crate) opportunity_level: String,
+    pub(crate) priority_score: f64,
+    pub(crate) priority_label: String,
+    pub(crate) recommended_action: String,
+    pub(crate) needs_validation: bool,
+    pub(crate) validation_reason: String,
+    pub(crate) data_source: String,
+    pub(crate) method: String,
+    pub(crate) last_updated: String,
+    pub(crate) project_count: i64,
+    pub(crate) site_count: i64,
+    pub(crate) campaign_count: i64,
+    pub(crate) report_count: i64,
+    pub(crate) asset_count: i64,
+    pub(crate) open_alert_count: i64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct PhoneMatrixSummary {
+    pub(crate) total_population_analyzed: i64,
+    pub(crate) estimated_phone_owners: i64,
+    pub(crate) estimated_mobile_subscriptions: i64,
+    pub(crate) average_ownership_rate: f64,
+    pub(crate) high_opportunity_areas: i64,
+    pub(crate) low_confidence_areas: i64,
+    pub(crate) areas_needing_validation: i64,
+    pub(crate) top_region_by_opportunity: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct PhoneMatrixDashboard {
+    pub(crate) summary: PhoneMatrixSummary,
+    pub(crate) assumptions: PhoneMatrixAssumptions,
+    pub(crate) rows: Vec<PhoneMatrixRow>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PhoneMatrixDetailQuery {
+    pub(crate) region: String,
+    pub(crate) department: String,
+    pub(crate) commune: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct PhoneMatrixDetail {
+    pub(crate) row: PhoneMatrixRow,
+    pub(crate) breakdown: PhoneMatrixBreakdown,
+    pub(crate) related_projects: Vec<Project>,
+    pub(crate) related_sites: Vec<SiteProfile>,
+    pub(crate) related_campaigns: Vec<SurveyCampaign>,
+    pub(crate) related_reports: Vec<FieldReport>,
+    pub(crate) related_assets: Vec<InfrastructureAsset>,
+    pub(crate) related_alerts: Vec<Alert>,
+    pub(crate) related_tickets: Vec<MaintenanceTicket>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PhoneMatrixRecalculateRequest {
+    pub(crate) scope: String,
+    pub(crate) region: Option<String>,
+    pub(crate) department: Option<String>,
+    pub(crate) commune: Option<String>,
+    pub(crate) limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct PhoneMatrixRecalculationLog {
+    pub(crate) area: String,
+    pub(crate) old_estimate: i64,
+    pub(crate) new_estimate: i64,
+    pub(crate) assumption_version: String,
+    pub(crate) timestamp: String,
+    pub(crate) triggered_by: String,
 }
 
 #[derive(Deserialize)]

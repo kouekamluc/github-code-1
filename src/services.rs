@@ -157,6 +157,7 @@ fn apply_matrix(rows: Vec<DbLocation>) -> Vec<LocationStat> {
                 confidence,
                 urban_signal: urban,
                 data_source: row.data_source,
+                updated_at: row.updated_at,
             }
         })
         .collect()
@@ -205,7 +206,8 @@ pub(crate) async fn fetch_location_stats(pool: &PgPool) -> Result<Vec<LocationSt
             area_sqkm,
             phone_owners,
             population,
-            data_source
+            data_source,
+            updated_at::TEXT AS updated_at
         FROM mobile_phone_stats
         ORDER BY region, department, commune
         "#,
@@ -1193,6 +1195,12 @@ pub(crate) async fn build_workspace_health(pool: &PgPool) -> Result<WorkspaceHea
         .fetch_one(pool)
         .await?
         .0;
+    let active_projects = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM projects WHERE status IN ('active', 'in_field', 'planning')",
+    )
+    .fetch_one(pool)
+    .await?
+    .0;
     let sites = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM site_profiles")
         .fetch_one(pool)
         .await?
@@ -1206,6 +1214,14 @@ pub(crate) async fn build_workspace_health(pool: &PgPool) -> Result<WorkspaceHea
             .fetch_one(pool)
             .await?
             .0;
+    let linked_iot_readings = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM iot_readings")
+        .fetch_one(pool)
+        .await?
+        .0;
+    let reports_generated = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM field_reports")
+        .fetch_one(pool)
+        .await?
+        .0;
     let open_alerts =
         sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM alerts WHERE status <> 'resolved'")
             .fetch_one(pool)
@@ -1221,16 +1237,484 @@ pub(crate) async fn build_workspace_health(pool: &PgPool) -> Result<WorkspaceHea
         .fetch_one(pool)
         .await?
         .0;
+    let priority_opportunities = build_priority_zones(pool)
+        .await?
+        .into_iter()
+        .filter(|zone| zone.priority_score >= 52.0)
+        .count() as i64;
 
     Ok(WorkspaceHealth {
         organizations,
         projects,
+        active_projects,
         sites,
         campaigns,
         monitored_assets,
+        linked_iot_readings,
+        reports_generated,
         open_alerts,
         active_tickets,
         decision_snapshots,
+        priority_opportunities,
+    })
+}
+
+fn open_ticket(ticket: &MaintenanceTicket) -> bool {
+    ticket.status != "done" && ticket.status != "cancelled" && ticket.status != "completed"
+}
+
+fn active_decision(decision: &DecisionSnapshot) -> bool {
+    decision.decision_stage != "completed" && decision.decision_stage != "blocked"
+}
+
+fn latest(values: impl IntoIterator<Item = String>) -> String {
+    values
+        .into_iter()
+        .max()
+        .unwrap_or_else(|| "No activity yet".into())
+}
+
+fn workspace_readiness(
+    site_count: i64,
+    campaign_count: i64,
+    decision_count: i64,
+    asset_count: i64,
+    open_ticket_count: i64,
+) -> f64 {
+    let proof_score = (site_count.min(2) as f64 * 18.0)
+        + (campaign_count.min(2) as f64 * 14.0)
+        + (decision_count.min(2) as f64 * 14.0)
+        + (asset_count.min(3) as f64 * 10.0);
+    (20.0 + proof_score - (open_ticket_count as f64 * 8.0)).clamp(0.0, 100.0)
+}
+
+fn project_next_action(
+    site_count: i64,
+    campaign_count: i64,
+    decision_count: i64,
+    asset_count: i64,
+    open_ticket_count: i64,
+) -> String {
+    if open_ticket_count > 0 {
+        "Close open maintenance tickets before scaling the field plan.".into()
+    } else if site_count == 0 {
+        "Create a site profile with GPS coordinates, access notes, and a trust signal.".into()
+    } else if campaign_count == 0 {
+        "Launch an offline-ready field survey campaign for local validation.".into()
+    } else if asset_count == 0 {
+        "Link an infrastructure asset or signal probe to make monitoring operational.".into()
+    } else if decision_count == 0 {
+        "Generate a decision snapshot with evidence, budget, owner, and risk.".into()
+    } else {
+        "Review evidence quality and move the strongest decision into execution.".into()
+    }
+}
+
+pub(crate) async fn build_workspace_dashboard(
+    pool: &PgPool,
+) -> Result<WorkspaceDashboard, sqlx::Error> {
+    let health = build_workspace_health(pool).await?;
+    let organizations = fetch_organizations(pool).await?;
+    let projects = fetch_projects(pool).await?;
+    let sites = fetch_site_profiles(pool).await?;
+    let campaigns = fetch_survey_campaigns(pool).await?;
+    let decisions = fetch_decision_snapshots(pool).await?;
+    let assets = fetch_assets(pool).await?;
+    let alerts = fetch_alerts(pool).await?;
+    let tickets = fetch_tickets(pool).await?;
+    let _readings = fetch_iot_readings(pool).await?;
+    let reports = fetch_reports(pool).await?;
+    let priority_opportunities = build_priority_zones(pool).await?;
+
+    let organization_intelligence = organizations
+        .iter()
+        .cloned()
+        .map(|organization| {
+            let org_projects = projects
+                .iter()
+                .filter(|project| project.organization_id == Some(organization.id))
+                .collect::<Vec<_>>();
+            let project_ids = org_projects
+                .iter()
+                .map(|project| project.id)
+                .collect::<HashSet<_>>();
+            let linked_site_count = sites
+                .iter()
+                .filter(|site| site.project_id.is_some_and(|id| project_ids.contains(&id)))
+                .count() as i64;
+            let active_decision_count = decisions
+                .iter()
+                .filter(|decision| {
+                    decision
+                        .project_id
+                        .is_some_and(|id| project_ids.contains(&id))
+                        && active_decision(decision)
+                })
+                .count() as i64;
+            let open_alert_count = alerts
+                .iter()
+                .filter(|alert| {
+                    alert.project_id.is_some_and(|id| project_ids.contains(&id))
+                        && alert.status != "resolved"
+                })
+                .count() as i64;
+            let last_activity = latest(
+                org_projects
+                    .iter()
+                    .map(|project| project.created_at.clone())
+                    .chain(
+                        decisions
+                            .iter()
+                            .filter(|decision| {
+                                decision
+                                    .project_id
+                                    .is_some_and(|id| project_ids.contains(&id))
+                            })
+                            .map(|decision| decision.created_at.clone()),
+                    )
+                    .chain(std::iter::once(organization.created_at.clone())),
+            );
+
+            OrganizationIntelligence {
+                organization,
+                project_count: project_ids.len() as i64,
+                linked_site_count,
+                active_decision_count,
+                open_alert_count,
+                last_activity,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let project_intelligence = projects
+        .iter()
+        .cloned()
+        .map(|project| {
+            let site_count = sites
+                .iter()
+                .filter(|site| site.project_id == Some(project.id))
+                .count() as i64;
+            let campaign_count = campaigns
+                .iter()
+                .filter(|campaign| campaign.project_id == Some(project.id))
+                .count() as i64;
+            let decision_count = decisions
+                .iter()
+                .filter(|decision| decision.project_id == Some(project.id))
+                .count() as i64;
+            let asset_count = assets
+                .iter()
+                .filter(|asset| asset.project_id == Some(project.id))
+                .count() as i64;
+            let open_ticket_count = tickets
+                .iter()
+                .filter(|ticket| ticket.project_id == Some(project.id) && open_ticket(ticket))
+                .count() as i64;
+            let latest_activity = latest(
+                std::iter::once(project.created_at.clone())
+                    .chain(
+                        sites
+                            .iter()
+                            .filter(|site| site.project_id == Some(project.id))
+                            .map(|site| site.created_at.clone()),
+                    )
+                    .chain(
+                        campaigns
+                            .iter()
+                            .filter(|campaign| campaign.project_id == Some(project.id))
+                            .map(|campaign| campaign.created_at.clone()),
+                    )
+                    .chain(
+                        decisions
+                            .iter()
+                            .filter(|decision| decision.project_id == Some(project.id))
+                            .map(|decision| decision.created_at.clone()),
+                    ),
+            );
+
+            ProjectIntelligence {
+                project,
+                site_count,
+                campaign_count,
+                decision_count,
+                asset_count,
+                open_ticket_count,
+                execution_readiness: workspace_readiness(
+                    site_count,
+                    campaign_count,
+                    decision_count,
+                    asset_count,
+                    open_ticket_count,
+                ),
+                recommended_next_action: project_next_action(
+                    site_count,
+                    campaign_count,
+                    decision_count,
+                    asset_count,
+                    open_ticket_count,
+                ),
+                latest_activity,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let site_intelligence = sites
+        .iter()
+        .cloned()
+        .map(|site| {
+            let linked_assets = assets
+                .iter()
+                .filter(|asset| asset.site_profile_id == Some(site.id))
+                .count() as i64;
+            let linked_reports = reports
+                .iter()
+                .filter(|report| {
+                    report.site_profile_id == Some(site.id)
+                        || same_area(
+                            &site.region,
+                            &site.department,
+                            &site.commune,
+                            (&report.region, &report.department, &report.commune),
+                        )
+                })
+                .count() as i64;
+            let linked_alerts = alerts
+                .iter()
+                .filter(|alert| {
+                    alert.site_profile_id == Some(site.id) && alert.status != "resolved"
+                })
+                .count() as i64;
+            let linked_tickets = tickets
+                .iter()
+                .filter(|ticket| ticket.site_profile_id == Some(site.id) && open_ticket(ticket))
+                .count() as i64;
+
+            SiteProfileIntelligence {
+                site,
+                linked_assets,
+                linked_reports,
+                linked_alerts,
+                linked_tickets,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let campaign_intelligence = campaigns
+        .iter()
+        .cloned()
+        .map(|campaign| {
+            let submitted_reports = reports
+                .iter()
+                .filter(|report| {
+                    report.campaign_id == Some(campaign.id)
+                        || (campaign
+                            .target_region
+                            .as_ref()
+                            .is_some_and(|region| region == &report.region)
+                            && campaign
+                                .target_department
+                                .as_ref()
+                                .map_or(true, |department| department == &report.department)
+                            && campaign
+                                .target_commune
+                                .as_ref()
+                                .map_or(true, |commune| commune == &report.commune))
+                })
+                .count() as i64;
+            let field_validation_purpose = match campaign.form_type.as_str() {
+                "phone_ownership_baseline" => {
+                    "Validate phone access assumptions and confidence before investment."
+                }
+                "signal_check" => {
+                    "Verify signal quality, dead zones, and probe deployment readiness."
+                }
+                "asset_condition" => "Confirm infrastructure condition and maintenance risk.",
+                _ => "Collect GPS/photo proof and local trust evidence.",
+            }
+            .to_string();
+
+            CampaignIntelligence {
+                campaign,
+                submitted_reports,
+                field_validation_purpose,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut activity = Vec::new();
+    activity.extend(organizations.iter().map(|item| WorkspaceActivity {
+        action: "Organization created".into(),
+        related_entity: item.name.clone(),
+        timestamp: item.created_at.clone(),
+        source: "Demo Operator".into(),
+        description: format!("{} workspace registered as {}.", item.name, item.org_type),
+    }));
+    activity.extend(projects.iter().map(|item| WorkspaceActivity {
+        action: "Project created".into(),
+        related_entity: item.name.clone(),
+        timestamp: item.created_at.clone(),
+        source: "Demo Operator".into(),
+        description: format!(
+            "{} opened in {}.",
+            item.name,
+            item.region.as_deref().unwrap_or("multi-region")
+        ),
+    }));
+    activity.extend(sites.iter().map(|item| WorkspaceActivity {
+        action: "Site profile added".into(),
+        related_entity: item.name.clone(),
+        timestamp: item.created_at.clone(),
+        source: "Field system".into(),
+        description: format!(
+            "{} site registered in {}, {}.",
+            item.site_type, item.commune, item.department
+        ),
+    }));
+    activity.extend(campaigns.iter().map(|item| WorkspaceActivity {
+        action: "Survey campaign launched".into(),
+        related_entity: item.name.clone(),
+        timestamp: item.created_at.clone(),
+        source: "System".into(),
+        description: format!(
+            "{} campaign is {} with {} capture.",
+            item.form_type,
+            item.status,
+            if item.offline_enabled {
+                "offline"
+            } else {
+                "online"
+            }
+        ),
+    }));
+    activity.extend(decisions.iter().map(|item| WorkspaceActivity {
+        action: "Decision snapshot created".into(),
+        related_entity: item.title.clone(),
+        timestamp: item.created_at.clone(),
+        source: "Demo Operator".into(),
+        description: format!(
+            "Decision is {} with {:.0}% evidence score.",
+            item.decision_stage, item.evidence_score
+        ),
+    }));
+    activity.extend(alerts.iter().map(|item| WorkspaceActivity {
+        action: "Alert created".into(),
+        related_entity: item.title.clone(),
+        timestamp: item.created_at.clone(),
+        source: "System".into(),
+        description: item.message.clone(),
+    }));
+    activity.extend(tickets.iter().map(|item| WorkspaceActivity {
+        action: if item.status == "done" || item.status == "completed" {
+            "Ticket completed".into()
+        } else {
+            "Ticket opened".into()
+        },
+        related_entity: item.title.clone(),
+        timestamp: item.updated_at.clone(),
+        source: item.assigned_to.clone().unwrap_or_else(|| "System".into()),
+        description: format!("{} priority ticket is {}.", item.priority, item.status),
+    }));
+    activity.extend(reports.iter().map(|item| WorkspaceActivity {
+        action: "Report generated".into(),
+        related_entity: item.report_type.clone(),
+        timestamp: item.created_at.clone(),
+        source: item.submitted_by.clone(),
+        description: format!(
+            "{} report submitted for {}.",
+            item.evidence_quality, item.commune
+        ),
+    }));
+    activity.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    activity.truncate(16);
+
+    let evidence_quality = if health.reports_generated + health.linked_iot_readings == 0 {
+        0.0
+    } else {
+        ((health.reports_generated.min(12) + health.linked_iot_readings.min(20)) as f64 / 32.0)
+            * 100.0
+    };
+    let execution_readiness = if project_intelligence.is_empty() {
+        0.0
+    } else {
+        project_intelligence
+            .iter()
+            .map(|item| item.execution_readiness)
+            .sum::<f64>()
+            / project_intelligence.len() as f64
+    };
+    let operational_risk = (health.open_alerts * 12 + health.active_tickets * 8).min(100);
+
+    Ok(WorkspaceDashboard {
+        health: health.clone(),
+        business_cards: vec![
+            WorkspaceBusinessCard {
+                label: "Workspace health".into(),
+                value: format!(
+                    "{:.0}%",
+                    workspace_readiness(
+                        health.sites,
+                        health.campaigns,
+                        health.decision_snapshots,
+                        health.monitored_assets,
+                        health.active_tickets
+                    )
+                ),
+                detail: "Based on sites, campaigns, decisions, assets, and unresolved tickets."
+                    .into(),
+                tone: "bronze".into(),
+            },
+            WorkspaceBusinessCard {
+                label: "Execution readiness".into(),
+                value: format!("{:.0}%", execution_readiness),
+                detail: "Average project readiness across proof, monitoring, and decision setup."
+                    .into(),
+                tone: "green".into(),
+            },
+            WorkspaceBusinessCard {
+                label: "Evidence quality".into(),
+                value: format!("{:.0}%", evidence_quality.min(100.0)),
+                detail: format!(
+                    "{} reports and {} telemetry readings linked.",
+                    health.reports_generated, health.linked_iot_readings
+                ),
+                tone: "gold".into(),
+            },
+            WorkspaceBusinessCard {
+                label: "Field validation load".into(),
+                value: (health.open_alerts + health.active_tickets).to_string(),
+                detail: "Open alerts plus active maintenance tickets requiring field attention."
+                    .into(),
+                tone: "red".into(),
+            },
+            WorkspaceBusinessCard {
+                label: "Operational risk".into(),
+                value: format!("{}%", operational_risk),
+                detail: "Weighted from unresolved alerts and active maintenance pressure.".into(),
+                tone: "red".into(),
+            },
+            WorkspaceBusinessCard {
+                label: "Priority opportunities".into(),
+                value: priority_opportunities
+                    .iter()
+                    .filter(|zone| zone.priority_score >= 52.0)
+                    .count()
+                    .to_string(),
+                detail: "High-priority phone matrix zones available for campaigns or decisions."
+                    .into(),
+                tone: "green".into(),
+            },
+        ],
+        organizations,
+        organization_intelligence,
+        projects,
+        project_intelligence,
+        sites,
+        site_intelligence,
+        campaigns,
+        campaign_intelligence,
+        recent_decisions: decisions.into_iter().take(8).collect(),
+        activity,
+        market_realities: market_realities(),
     })
 }
 
@@ -1444,7 +1928,7 @@ pub(crate) async fn build_overview_intelligence(
     ];
 
     Ok(OverviewIntelligence {
-        generated_for: "InfraPulse Cameroon operating overview".into(),
+        generated_for: "KK Evo Cameroon operating overview".into(),
         kpis: vec![
             OverviewKpi {
                 label: "Opportunity pipeline".into(),
@@ -1454,7 +1938,7 @@ pub(crate) async fn build_overview_intelligence(
                     top_opportunities.len(),
                     total_pipeline_reach
                 ),
-                tone: "blue".into(),
+                tone: "bronze".into(),
             },
             OverviewKpi {
                 label: "Trust proof assets".into(),
@@ -1593,4 +2077,508 @@ pub(crate) async fn build_priority_zones(pool: &PgPool) -> Result<Vec<PriorityZo
     });
 
     Ok(zones)
+}
+
+pub(crate) fn phone_matrix_assumptions() -> PhoneMatrixAssumptions {
+    PhoneMatrixAssumptions {
+        adult_share: 0.60,
+        national_adult_phone_ownership: 0.80,
+        mobile_subscriptions_per_person: CAMEROON_2024_MOBILE_SUBSCRIPTIONS_PER_100 / 100.0,
+        priority_population_weight: 28.0,
+        priority_gap_weight: 28.0,
+        priority_confidence_weight: 12.0,
+        priority_alert_weight: 16.0,
+        assumption_version: "KK-EVO-CMR-2026.05".into(),
+        last_updated: "2026-05-23".into(),
+    }
+}
+
+fn confidence_level(confidence: f64) -> String {
+    if confidence >= 0.86 {
+        "High".into()
+    } else if confidence >= 0.68 {
+        "Medium".into()
+    } else if confidence > 0.0 {
+        "Low".into()
+    } else {
+        "Unknown".into()
+    }
+}
+
+fn confidence_reason(area: &LocationStat, report_count: i64, asset_count: i64) -> String {
+    if area.metric_source == "Measured local update" && (report_count > 0 || asset_count > 0) {
+        "High confidence because local values exist and the area has field, telecom, IoT, or site validation.".into()
+    } else if area.metric_source == "Measured local update" {
+        "High confidence because local measured phone and population values were entered.".into()
+    } else if area.confidence >= 0.68 {
+        "Medium confidence because official/local geometry exists but phone ownership still uses national and regional assumptions.".into()
+    } else {
+        "Low confidence because phone ownership is estimated from broad national assumptions and has not been field-validated.".into()
+    }
+}
+
+fn opportunity_level(score: f64) -> String {
+    if score >= 68.0 {
+        "High".into()
+    } else if score >= 42.0 {
+        "Medium".into()
+    } else {
+        "Low".into()
+    }
+}
+
+fn matrix_recommendation(
+    area: &LocationStat,
+    opportunity_score: f64,
+    report_count: i64,
+    asset_count: i64,
+    open_alert_count: i64,
+) -> String {
+    if area.confidence < 0.68 && open_alert_count > 0 {
+        "Prioritize field validation and risk assessment before new investment.".into()
+    } else if area.confidence < 0.68 && area.population > 50_000 {
+        "Run field survey before major investment.".into()
+    } else if area.phone_rate < 65.0 && area.population > 40_000 {
+        "Consider digital inclusion or connectivity expansion study.".into()
+    } else if area.phone_rate >= 78.0 && opportunity_score >= 50.0 {
+        "Suitable for mobile-first service rollout with targeted GPS spot checks.".into()
+    } else if asset_count > 0 && area.phone_rate >= 70.0 {
+        "Consider IoT or remote monitoring deployment.".into()
+    } else if report_count == 0 {
+        "Collect GPS/photo evidence to strengthen confidence.".into()
+    } else {
+        "Keep in the workspace pipeline and review during the next decision cycle.".into()
+    }
+}
+
+fn phone_matrix_breakdown(area: &LocationStat) -> PhoneMatrixBreakdown {
+    let assumptions = phone_matrix_assumptions();
+    let regional_factor = region_weight(&area.region);
+    let urban_rural_factor = (0.78 + area.urban_signal * 0.44).clamp(0.72, 1.22);
+    let maximum_owners_allowed =
+        ((area.population as f64) * assumptions.adult_share * 0.95).round() as i64;
+    PhoneMatrixBreakdown {
+        population: area.population,
+        adult_share: assumptions.adult_share,
+        adult_ownership_rate: assumptions.national_adult_phone_ownership,
+        regional_factor,
+        urban_rural_factor,
+        estimated_phone_owners_formula: format!(
+            "{} x {:.2} x {:.2} x {:.2} x {:.2} = {}",
+            area.population,
+            assumptions.adult_share,
+            assumptions.national_adult_phone_ownership,
+            regional_factor,
+            urban_rural_factor,
+            area.phone_owners
+        ),
+        maximum_owners_allowed,
+        confidence_level: confidence_level(area.confidence),
+        confidence_reason: confidence_reason(area, 0, 0),
+        data_source: area.data_source.clone(),
+    }
+}
+
+pub(crate) async fn build_phone_matrix(pool: &PgPool) -> Result<PhoneMatrixDashboard, sqlx::Error> {
+    let assumptions = phone_matrix_assumptions();
+    let stats = fetch_location_stats(pool).await?;
+    let priority_zones = build_priority_zones(pool).await?;
+    let projects = fetch_projects(pool).await?;
+    let sites = fetch_site_profiles(pool).await?;
+    let campaigns = fetch_survey_campaigns(pool).await?;
+    let reports = fetch_reports(pool).await?;
+    let assets = fetch_assets(pool).await?;
+    let alerts = fetch_alerts(pool).await?;
+
+    let mut priority_by_area: HashMap<(String, String, String), PriorityZone> = HashMap::new();
+    for zone in priority_zones {
+        priority_by_area.insert(
+            (
+                zone.region.clone(),
+                zone.department.clone(),
+                zone.commune.clone(),
+            ),
+            zone,
+        );
+    }
+
+    let rows = stats
+        .iter()
+        .map(|area| {
+            let key = (
+                area.region.clone(),
+                area.department.clone(),
+                area.commune.clone(),
+            );
+            let site_count = sites
+                .iter()
+                .filter(|site| {
+                    same_area(
+                        &area.region,
+                        &area.department,
+                        &area.commune,
+                        (&site.region, &site.department, &site.commune),
+                    )
+                })
+                .count() as i64;
+            let project_count = projects
+                .iter()
+                .filter(|project| {
+                    project
+                        .region
+                        .as_ref()
+                        .is_some_and(|region| region == &area.region)
+                })
+                .count() as i64;
+            let campaign_count = campaigns
+                .iter()
+                .filter(|campaign| {
+                    campaign
+                        .target_region
+                        .as_ref()
+                        .map_or(true, |region| region == &area.region)
+                        && campaign
+                            .target_department
+                            .as_ref()
+                            .map_or(true, |department| department == &area.department)
+                        && campaign
+                            .target_commune
+                            .as_ref()
+                            .map_or(true, |commune| commune == &area.commune)
+                })
+                .count() as i64;
+            let report_count = reports
+                .iter()
+                .filter(|report| {
+                    same_area(
+                        &area.region,
+                        &area.department,
+                        &area.commune,
+                        (&report.region, &report.department, &report.commune),
+                    )
+                })
+                .count() as i64;
+            let area_assets = assets
+                .iter()
+                .filter(|asset| {
+                    same_area(
+                        &area.region,
+                        &area.department,
+                        &area.commune,
+                        (&asset.region, &asset.department, &asset.commune),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let asset_count = area_assets.len() as i64;
+            let asset_ids = area_assets
+                .iter()
+                .map(|asset| asset.id)
+                .collect::<HashSet<_>>();
+            let open_alert_count = alerts
+                .iter()
+                .filter(|alert| {
+                    alert.status != "resolved"
+                        && alert
+                            .asset_id
+                            .is_some_and(|asset_id| asset_ids.contains(&asset_id))
+                })
+                .count() as i64;
+            let priority = priority_by_area.get(&key);
+            let priority_score = priority.map_or(0.0, |zone| zone.priority_score);
+            let population_component = ((area.population as f64 / 150_000.0).min(1.0)) * 35.0;
+            let phone_access_component = (area.phone_rate / 100.0) * 20.0;
+            let validation_gap_component = (1.0 - area.confidence).max(0.0) * 25.0;
+            let operations_component =
+                ((open_alert_count + asset_count + report_count).min(5) as f64) * 4.0;
+            let opportunity_score = (population_component
+                + phone_access_component
+                + validation_gap_component
+                + operations_component)
+                .min(100.0);
+            let needs_validation = area.confidence < 0.68
+                || (area.population > 50_000 && report_count == 0)
+                || (opportunity_score >= 65.0 && report_count == 0);
+            let validation_reason = if area.confidence < 0.68 {
+                "Low confidence estimate needs field validation.".into()
+            } else if report_count == 0 && area.population > 50_000 {
+                "High population area has no recent field report.".into()
+            } else if opportunity_score >= 65.0 && report_count == 0 {
+                "High opportunity area needs proof before decision.".into()
+            } else {
+                "No immediate validation flag.".into()
+            };
+            let estimated_mobile_subscriptions = ((area.population as f64)
+                * assumptions.mobile_subscriptions_per_person
+                * (area.phone_rate / 100.0).clamp(0.35, 1.0))
+            .round() as i64;
+            let confidence_reason = confidence_reason(area, report_count, asset_count);
+
+            PhoneMatrixRow {
+                pcode: area.pcode.clone(),
+                region: area.region.clone(),
+                department: area.department.clone(),
+                commune: area.commune.clone(),
+                location: area.location.clone(),
+                latitude: area.latitude,
+                longitude: area.longitude,
+                area_sqkm: area.area_sqkm,
+                population: area.population,
+                estimated_phone_owners: area.phone_owners,
+                estimated_mobile_subscriptions,
+                ownership_rate: area.phone_rate,
+                confidence: area.confidence,
+                confidence_level: confidence_level(area.confidence),
+                confidence_reason,
+                opportunity_score,
+                opportunity_level: opportunity_level(opportunity_score),
+                priority_score,
+                priority_label: priority
+                    .map(|zone| zone.priority_label.clone())
+                    .unwrap_or_else(|| priority_label(priority_score)),
+                recommended_action: matrix_recommendation(
+                    area,
+                    opportunity_score,
+                    report_count,
+                    asset_count,
+                    open_alert_count,
+                ),
+                needs_validation,
+                validation_reason,
+                data_source: area.data_source.clone(),
+                method: area.metric_source.clone(),
+                last_updated: area.updated_at.clone(),
+                project_count,
+                site_count,
+                campaign_count,
+                report_count,
+                asset_count,
+                open_alert_count,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let total_population_analyzed = rows.iter().map(|row| row.population).sum::<i64>();
+    let estimated_phone_owners = rows
+        .iter()
+        .map(|row| row.estimated_phone_owners)
+        .sum::<i64>();
+    let estimated_mobile_subscriptions = rows
+        .iter()
+        .map(|row| row.estimated_mobile_subscriptions)
+        .sum::<i64>();
+    let average_ownership_rate = if total_population_analyzed > 0 {
+        estimated_phone_owners as f64 / total_population_analyzed as f64 * 100.0
+    } else {
+        0.0
+    };
+    let mut region_scores: HashMap<String, f64> = HashMap::new();
+    for row in &rows {
+        *region_scores.entry(row.region.clone()).or_default() += row.opportunity_score;
+    }
+    let top_region_by_opportunity = region_scores
+        .into_iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(region, _)| region)
+        .unwrap_or_else(|| "No region".into());
+
+    Ok(PhoneMatrixDashboard {
+        summary: PhoneMatrixSummary {
+            total_population_analyzed,
+            estimated_phone_owners,
+            estimated_mobile_subscriptions,
+            average_ownership_rate,
+            high_opportunity_areas: rows
+                .iter()
+                .filter(|row| row.opportunity_score >= 68.0)
+                .count() as i64,
+            low_confidence_areas: rows
+                .iter()
+                .filter(|row| row.confidence_level == "Low" || row.confidence_level == "Unknown")
+                .count() as i64,
+            areas_needing_validation: rows.iter().filter(|row| row.needs_validation).count() as i64,
+            top_region_by_opportunity,
+        },
+        assumptions,
+        rows,
+    })
+}
+
+pub(crate) async fn build_phone_matrix_detail(
+    pool: &PgPool,
+    query: &PhoneMatrixDetailQuery,
+) -> Result<Option<PhoneMatrixDetail>, sqlx::Error> {
+    let dashboard = build_phone_matrix(pool).await?;
+    let Some(row) = dashboard.rows.into_iter().find(|row| {
+        same_area(
+            &query.region,
+            &query.department,
+            &query.commune,
+            (&row.region, &row.department, &row.commune),
+        )
+    }) else {
+        return Ok(None);
+    };
+
+    let stats = fetch_location_stats(pool).await?;
+    let Some(area) = stats.into_iter().find(|area| {
+        same_area(
+            &query.region,
+            &query.department,
+            &query.commune,
+            (&area.region, &area.department, &area.commune),
+        )
+    }) else {
+        return Ok(None);
+    };
+
+    let breakdown = phone_matrix_breakdown(&area);
+    let related_projects = fetch_projects(pool)
+        .await?
+        .into_iter()
+        .filter(|project| {
+            project
+                .region
+                .as_ref()
+                .is_some_and(|region| region == &row.region)
+        })
+        .collect();
+    let related_sites = fetch_site_profiles(pool)
+        .await?
+        .into_iter()
+        .filter(|site| {
+            same_area(
+                &row.region,
+                &row.department,
+                &row.commune,
+                (&site.region, &site.department, &site.commune),
+            )
+        })
+        .collect();
+    let related_campaigns = fetch_survey_campaigns(pool)
+        .await?
+        .into_iter()
+        .filter(|campaign| {
+            campaign
+                .target_region
+                .as_ref()
+                .map_or(true, |region| region == &row.region)
+                && campaign
+                    .target_department
+                    .as_ref()
+                    .map_or(true, |department| department == &row.department)
+                && campaign
+                    .target_commune
+                    .as_ref()
+                    .map_or(true, |commune| commune == &row.commune)
+        })
+        .collect();
+    let related_reports = fetch_reports(pool)
+        .await?
+        .into_iter()
+        .filter(|report| {
+            same_area(
+                &row.region,
+                &row.department,
+                &row.commune,
+                (&report.region, &report.department, &report.commune),
+            )
+        })
+        .collect();
+    let related_assets = fetch_assets(pool)
+        .await?
+        .into_iter()
+        .filter(|asset| {
+            same_area(
+                &row.region,
+                &row.department,
+                &row.commune,
+                (&asset.region, &asset.department, &asset.commune),
+            )
+        })
+        .collect::<Vec<_>>();
+    let asset_ids = related_assets
+        .iter()
+        .map(|asset| asset.id)
+        .collect::<HashSet<_>>();
+    let related_alerts = fetch_alerts(pool)
+        .await?
+        .into_iter()
+        .filter(|alert| {
+            alert
+                .asset_id
+                .is_some_and(|asset_id| asset_ids.contains(&asset_id))
+        })
+        .collect();
+    let related_tickets = fetch_tickets(pool)
+        .await?
+        .into_iter()
+        .filter(|ticket| {
+            ticket
+                .asset_id
+                .is_some_and(|asset_id| asset_ids.contains(&asset_id))
+        })
+        .collect();
+
+    Ok(Some(PhoneMatrixDetail {
+        row,
+        breakdown,
+        related_projects,
+        related_sites,
+        related_campaigns,
+        related_reports,
+        related_assets,
+        related_alerts,
+        related_tickets,
+    }))
+}
+
+pub(crate) async fn recalculate_phone_matrix(
+    pool: &PgPool,
+    request: &PhoneMatrixRecalculateRequest,
+) -> Result<Vec<PhoneMatrixRecalculationLog>, sqlx::Error> {
+    let mut rows = build_phone_matrix(pool).await?.rows;
+    rows.retain(|row| {
+        request
+            .region
+            .as_ref()
+            .map_or(true, |region| region == &row.region)
+            && request
+                .department
+                .as_ref()
+                .map_or(true, |department| department == &row.department)
+            && request
+                .commune
+                .as_ref()
+                .map_or(true, |commune| commune == &row.commune)
+    });
+    match request.scope.as_str() {
+        "selected" => rows.truncate(1),
+        "top_priority" => {
+            rows.sort_by(|a, b| {
+                b.priority_score
+                    .partial_cmp(&a.priority_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            rows.truncate(request.limit.unwrap_or(25));
+        }
+        "filtered" => rows.truncate(request.limit.unwrap_or(rows.len())),
+        _ => {}
+    }
+    let timestamp = sqlx::query_as::<_, (String,)>("SELECT NOW()::TEXT")
+        .fetch_one(pool)
+        .await?
+        .0;
+    let version = phone_matrix_assumptions().assumption_version;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| PhoneMatrixRecalculationLog {
+            area: format!("{}, {}, {}", row.commune, row.department, row.region),
+            old_estimate: row.estimated_phone_owners,
+            new_estimate: row.estimated_phone_owners,
+            assumption_version: version.clone(),
+            timestamp: timestamp.clone(),
+            triggered_by: "Demo Operator".into(),
+        })
+        .collect())
 }

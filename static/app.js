@@ -12,10 +12,19 @@ const matrixSearch = document.getElementById('matrixSearch');
 const matrixSort = document.getElementById('matrixSort');
 const matrixOwnershipFilter = document.getElementById('matrixOwnershipFilter');
 const matrixConfidenceFilter = document.getElementById('matrixConfidenceFilter');
+const matrixOpportunityFilter = document.getElementById('matrixOpportunityFilter');
+const matrixValidationFilter = document.getElementById('matrixValidationFilter');
+const matrixProjectFilter = document.getElementById('matrixProjectFilter');
+const matrixMinPopulation = document.getElementById('matrixMinPopulation');
+const matrixMinPriority = document.getElementById('matrixMinPriority');
+const matrixMaxPriority = document.getElementById('matrixMaxPriority');
 const matrixExportButton = document.getElementById('matrix-export-button');
 const assetSearch = document.getElementById('assetSearch');
 const assetStatusFilter = document.getElementById('assetStatusFilter');
 const assetTypeFilter = document.getElementById('assetTypeFilter');
+const workspaceSearch = document.getElementById('workspaceSearch');
+const workspaceStatusFilter = document.getElementById('workspaceStatusFilter');
+const workspaceTypeFilter = document.getElementById('workspaceTypeFilter');
 
 let map;
 let markersLayer;
@@ -30,6 +39,7 @@ let tickets = [];
 let organizations = [];
 let projects = [];
 let workspaceDashboard = null;
+let phoneMatrixDashboard = null;
 let overviewIntelligence = null;
 let signalProbeDashboard = null;
 let selectedAreaDossier = null;
@@ -131,8 +141,28 @@ function formatRate(value) {
   return `${Number(value ?? 0).toFixed(1)}%`;
 }
 
+function confidenceLabel(confidence) {
+  if (confidence >= 0.86) return 'High';
+  if (confidence >= 0.68) return 'Medium';
+  if (confidence > 0) return 'Low';
+  return 'Unknown';
+}
+
 function formatMoneyXaf(value) {
   return value ? `${formatNumber(value)} XAF` : 'Budget not set';
+}
+
+function phoneMatrixRowToStat(row) {
+  return {
+    ...row,
+    phone_owners: row.estimated_phone_owners,
+    phone_rate: row.ownership_rate,
+    metric_source: row.method,
+    confidence: row.confidence,
+    urban_signal: row.urban_signal || 0,
+    data_source: row.data_source,
+    updated_at: row.last_updated,
+  };
 }
 
 function compactMoneyXaf(value) {
@@ -140,6 +170,16 @@ function compactMoneyXaf(value) {
   if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}M XAF`;
   if (amount >= 1_000) return `${Math.round(amount / 1_000)}K XAF`;
   return `${formatNumber(amount)} XAF`;
+}
+
+function labelize(value) {
+  return String(value || 'Unspecified').replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
+function shortDate(value) {
+  if (!value) return 'not set';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value).slice(0, 10) : date.toLocaleDateString();
 }
 
 function estimateBudgetXaf(area, context = localContextForArea(area)) {
@@ -618,35 +658,68 @@ function renderWorkspaces() {
   const health = workspaceDashboard?.health;
   const healthTarget = document.getElementById('workspace-health');
   if (healthTarget && health) {
-    healthTarget.innerHTML = `
-      <div class="metric-tile accent-bronze featured-metric"><span>Projects</span><strong>${health.projects}</strong><small>${health.organizations} client workspaces</small></div>
-      <div class="metric-tile accent-green"><span>Field sites</span><strong>${health.sites}</strong><small>Physical proof layer</small></div>
-      <div class="metric-tile accent-gold"><span>Campaigns</span><strong>${health.campaigns}</strong><small>Offline survey plans</small></div>
-      <div class="metric-tile accent-red"><span>Decision records</span><strong>${health.decision_snapshots}</strong><small>${health.active_tickets} active tickets</small></div>
-    `;
+    const cards = workspaceDashboard?.business_cards?.length ? workspaceDashboard.business_cards : [
+      { label: 'Projects', value: health.projects, detail: `${health.organizations} client workspaces`, tone: 'bronze' },
+      { label: 'Field sites', value: health.sites, detail: 'Physical proof layer', tone: 'green' },
+      { label: 'Campaigns', value: health.campaigns, detail: 'Offline survey plans', tone: 'gold' },
+      { label: 'Decision records', value: health.decision_snapshots, detail: `${health.active_tickets} active tickets`, tone: 'red' },
+    ];
+    healthTarget.innerHTML = cards.slice(0, 6).map((card, index) => `
+      <div class="metric-tile accent-${card.tone === 'bronze' ? 'bronze' : card.tone === 'green' ? 'green' : card.tone === 'gold' ? 'gold' : 'red'} ${index === 0 ? 'featured-metric' : ''}">
+        <span>${escapeHtml(card.label)}</span>
+        <strong>${escapeHtml(card.value)}</strong>
+        <small>${escapeHtml(card.detail)}</small>
+      </div>
+    `).join('');
   }
 
-  document.getElementById('organizations-list').innerHTML = organizations.map(organization => `
-    <article class="list-card">
+  const workspaceQuery = (workspaceSearch?.value || '').trim().toLowerCase();
+  const workspaceStatus = workspaceStatusFilter?.value || 'all';
+  const workspaceType = workspaceTypeFilter?.value || 'all';
+  const organizationRows = (workspaceDashboard?.organization_intelligence || organizations.map(organization => ({ organization })))
+    .filter(item => {
+      const organization = item.organization;
+      const haystack = [organization.name, organization.org_type, organization.contact_name, organization.contact_email].join(' ').toLowerCase();
+      if (workspaceQuery && !haystack.includes(workspaceQuery)) return false;
+      if (workspaceType !== 'all' && organization.org_type !== workspaceType) return false;
+      return true;
+    });
+  document.getElementById('organizations-list').innerHTML = organizationRows.length ? organizationRows.map(item => {
+    const organization = item.organization;
+    return `
+    <article class="list-card status-online">
       <div>
         <strong>${escapeHtml(organization.name)}</strong>
-        <span>${escapeHtml(organization.org_type)} &middot; ${escapeHtml(organization.contact_name || 'No contact')}</span>
+        <span>${escapeHtml(labelize(organization.org_type))} &middot; ${escapeHtml(organization.contact_name || 'No contact')}</span>
       </div>
       <span class="status-pill">Org #${organization.id}</span>
-      <p>${escapeHtml(organization.contact_email || 'No email recorded')}</p>
+      <p>${escapeHtml(organization.contact_email || 'No email recorded')} &middot; ${item.project_count || 0} projects &middot; ${item.linked_site_count || 0} sites &middot; ${item.active_decision_count || 0} active decisions &middot; ${item.open_alert_count || 0} open alerts &middot; Last ${shortDate(item.last_activity || organization.created_at)}</p>
     </article>
-  `).join('');
+  `;
+  }).join('') : '<div class="empty-state">No organizations yet. Create the first client, partner, or operating organization.</div>';
 
-  document.getElementById('projects-list').innerHTML = projects.map(project => `
+  const projectRows = (workspaceDashboard?.project_intelligence || projects.map(project => ({ project })))
+    .filter(item => {
+      const project = item.project;
+      const haystack = [project.name, project.organization_name, project.sector, project.region, project.status].join(' ').toLowerCase();
+      if (workspaceQuery && !haystack.includes(workspaceQuery)) return false;
+      if (workspaceStatus !== 'all' && project.status !== workspaceStatus) return false;
+      return true;
+    });
+  document.getElementById('projects-list').innerHTML = projectRows.length ? projectRows.map(item => {
+    const project = item.project;
+    return `
     <article class="list-card status-${escapeHtml(project.status)}">
       <div>
         <strong>${escapeHtml(project.name)}</strong>
-        <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(project.sector)}</span>
+        <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(labelize(project.sector))}</span>
       </div>
       <span class="status-pill">${escapeHtml(project.status)}</span>
-      <p>${escapeHtml(project.region || 'National')} &middot; Starts ${escapeHtml(project.start_date || 'not set')}</p>
+      <p>${escapeHtml(project.region || 'National')} &middot; Starts ${shortDate(project.start_date)} &middot; ${item.site_count || 0} sites &middot; ${item.campaign_count || 0} campaigns &middot; ${item.decision_count || 0} decisions &middot; ${item.asset_count || 0} assets &middot; ${item.open_ticket_count || 0} open tickets &middot; ${Number(item.execution_readiness || 0).toFixed(0)}% ready</p>
+      <p>${escapeHtml(item.recommended_next_action || 'Add proof and operational actions to improve readiness.')}</p>
     </article>
-  `).join('');
+  `;
+  }).join('') : '<div class="empty-state">No projects match the current filters.</div>';
 
   const projectOpsTarget = document.getElementById('project-operating-list');
   if (projectOpsTarget) {
@@ -702,27 +775,51 @@ function renderWorkspaces() {
     `).join('');
   }
 
-  document.getElementById('sites-list').innerHTML = sites.length ? sites.map(site => `
+  const siteRows = workspaceDashboard?.site_intelligence || sites.map(site => ({ site }));
+  document.getElementById('sites-list').innerHTML = siteRows.length ? siteRows.map(item => {
+    const site = item.site;
+    return `
     <article class="list-card">
       <div>
         <strong>${escapeHtml(site.name)}</strong>
-        <span>${escapeHtml(site.site_type)} &middot; ${escapeHtml(site.commune)}, ${escapeHtml(site.department)}</span>
+        <span>${escapeHtml(labelize(site.site_type))} &middot; ${escapeHtml(site.commune)}, ${escapeHtml(site.department)}</span>
       </div>
       <span class="status-pill">${escapeHtml(site.trust_signal)}</span>
-      <p>${escapeHtml(site.project_name || 'No project')} &middot; ${formatNumber(site.beneficiary_estimate || 0)} people &middot; ${escapeHtml(site.access_notes || 'No access notes')}</p>
+      <p>${escapeHtml(site.project_name || 'No project')} &middot; ${formatNumber(site.beneficiary_estimate || 0)} people &middot; ${item.linked_assets || 0} assets &middot; ${item.linked_reports || 0} reports &middot; ${item.linked_alerts || 0} alerts &middot; ${item.linked_tickets || 0} tickets</p>
+      <p>${escapeHtml(site.access_notes || 'No access notes')} &middot; GPS ${gpsLabel(site)}</p>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary site-action" data-action="profile" data-site="${site.id}">Area</button>
+        <button class="btn btn-sm btn-outline-secondary site-action" data-action="report" data-site="${site.id}">Report</button>
+        <button class="btn btn-sm btn-outline-secondary site-action" data-action="probe" data-site="${site.id}">Probe</button>
+        <button class="btn btn-sm btn-outline-secondary site-action" data-action="alert" data-site="${site.id}">Alert</button>
+        <button class="btn btn-sm btn-outline-secondary site-action" data-action="ticket" data-site="${site.id}">Ticket</button>
+        <button class="btn btn-sm btn-outline-secondary site-action" data-action="decision" data-site="${site.id}">Decision</button>
+      </div>
     </article>
-  `).join('') : '<div class="empty-state">No site profiles yet.</div>';
+  `;
+  }).join('') : '<div class="empty-state">No site profiles yet.</div>';
 
-  document.getElementById('campaigns-list').innerHTML = campaigns.length ? campaigns.map(campaign => `
+  const campaignRows = workspaceDashboard?.campaign_intelligence || campaigns.map(campaign => ({ campaign }));
+  document.getElementById('campaigns-list').innerHTML = campaignRows.length ? campaignRows.map(item => {
+    const campaign = item.campaign;
+    return `
     <article class="list-card status-${escapeHtml(campaign.status)}">
       <div>
         <strong>${escapeHtml(campaign.name)}</strong>
-        <span>${escapeHtml(campaign.form_type)} &middot; ${escapeHtml(campaign.target_commune || campaign.target_region || 'National')}</span>
+        <span>${escapeHtml(labelize(campaign.form_type))} &middot; ${escapeHtml(campaign.target_commune || campaign.target_region || 'National')}</span>
       </div>
       <span class="status-pill">${campaign.offline_enabled ? 'offline-ready' : 'online-only'}</span>
-      <p>${escapeHtml(campaign.project_name || 'No project')} &middot; ${escapeHtml(campaign.language_mode)} &middot; ${escapeHtml(campaign.starts_on || 'no start')} to ${escapeHtml(campaign.ends_on || 'no end')}</p>
+      <p>${escapeHtml(campaign.project_name || 'No project')} &middot; ${escapeHtml(campaign.language_mode)} &middot; ${shortDate(campaign.starts_on)} to ${shortDate(campaign.ends_on)} &middot; ${item.submitted_reports || 0} reports</p>
+      <p>${escapeHtml(item.field_validation_purpose || 'Collect field validation evidence.')}</p>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary campaign-action" data-action="reports" data-campaign="${campaign.id}">Reports</button>
+        <button class="btn btn-sm btn-outline-secondary campaign-action" data-action="decision" data-campaign="${campaign.id}">Decision</button>
+        <button class="btn btn-sm btn-success campaign-action" data-action="completed" data-campaign="${campaign.id}">Complete</button>
+        <a class="btn btn-sm btn-outline-secondary" href="/api/export/phone-matrix.csv">Export</a>
+      </div>
     </article>
-  `).join('') : '<div class="empty-state">No survey campaigns yet.</div>';
+  `;
+  }).join('') : '<div class="empty-state">No survey campaigns yet.</div>';
 
   document.getElementById('decision-snapshots-list').innerHTML = decisionSnapshots.length ? decisionSnapshots.map(decision => `
     <article class="list-card priority-${Number(decision.priority_score) >= 70 ? 'high' : Number(decision.priority_score) >= 45 ? 'medium' : 'watch'}">
@@ -735,6 +832,21 @@ function renderWorkspaces() {
     </article>
   `).join('') : '<div class="empty-state">No decision snapshots yet.</div>';
 
+  const activityTarget = document.getElementById('workspace-activity');
+  if (activityTarget) {
+    const activity = workspaceDashboard?.activity || [];
+    activityTarget.innerHTML = activity.length ? activity.map(item => `
+      <article class="compact-card">
+        <div>
+          <strong>${escapeHtml(item.action)}</strong>
+          <span>${escapeHtml(item.related_entity)} &middot; ${escapeHtml(item.source)} &middot; ${shortDate(item.timestamp)}</span>
+        </div>
+        <span class="status-pill">Activity</span>
+        <p>${escapeHtml(item.description)}</p>
+      </article>
+    `).join('') : '<div class="empty-state">No workspace activity yet.</div>';
+  }
+
   if (window.lucide) lucide.createIcons();
 
   document.querySelectorAll('.project-action').forEach(button => {
@@ -742,6 +854,65 @@ function renderWorkspaces() {
       const projectId = Number(button.dataset.project);
       const project = projects.find(item => item.id === projectId);
       prepareProjectAction(button.dataset.action, project);
+    });
+  });
+
+  document.querySelectorAll('.site-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const site = sites.find(item => item.id === Number(button.dataset.site));
+      if (!site) return;
+      const area = allStats.find(item => areaKey(item) === areaKey(site)) || site;
+      if (button.dataset.action === 'profile') return selectArea(area);
+      if (button.dataset.action === 'report') return prepareAreaAction('report', area);
+      if (button.dataset.action === 'probe') return prepareAreaAction('probe', area);
+      if (button.dataset.action === 'decision') return prepareAreaAction('decision', area);
+      if (button.dataset.action === 'alert') {
+        switchView('alerts');
+        document.getElementById('alertTitle').value = `${site.name} validation alert`;
+        document.getElementById('alertMessage').value = `${site.commune} site needs field validation. ${site.access_notes || 'Review access and trust proof.'}`;
+        document.getElementById('alertTitle').focus();
+      }
+      if (button.dataset.action === 'ticket') {
+        switchView('tickets');
+        document.getElementById('ticketTitle').value = `${site.name} field follow-up`;
+        document.getElementById('ticketPriority').value = 'high';
+        document.getElementById('ticketTitle').focus();
+      }
+    });
+  });
+
+  document.querySelectorAll('.campaign-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const campaign = campaigns.find(item => item.id === Number(button.dataset.campaign));
+      if (!campaign) return;
+      if (button.dataset.action === 'reports') {
+        switchView('reports');
+        document.getElementById('reportType').value = campaign.form_type;
+        document.getElementById('reportRegion').value = campaign.target_region || '';
+        document.getElementById('reportDepartment').value = campaign.target_department || '';
+        document.getElementById('reportCommune').value = campaign.target_commune || '';
+        document.getElementById('reportType').focus();
+      }
+      if (button.dataset.action === 'decision') {
+        switchView('workspaces');
+        document.getElementById('decisionProject').value = campaign.project_id || '';
+        document.getElementById('decisionTitle').value = `${campaign.name} evidence decision`;
+        document.getElementById('decisionRationale').value = `${campaign.name} is ${campaign.status} for ${campaign.target_commune || campaign.target_region || 'the target area'} and should be converted into an evidence-backed decision.`;
+        document.getElementById('decisionNextAction').value = 'Review submitted reports, confirm evidence quality, and approve the next field action.';
+        document.getElementById('decisionTitle').focus();
+      }
+      if (button.dataset.action === 'completed') {
+        fetchJson(`/api/survey-campaigns/${campaign.id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'completed' }),
+        }).then(async data => {
+          campaigns = data;
+          workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
+          renderWorkspaces();
+          setStatus(document.getElementById('campaign-status'), `${campaign.name} marked completed.`, 'success');
+        }).catch(error => setStatus(document.getElementById('campaign-status'), error.message, 'danger'));
+      }
     });
   });
 
@@ -754,33 +925,42 @@ function renderRegions(regions) {
   currentMatrixRows = applyMatrixControls(regions);
   renderMatrixInsights(currentMatrixRows);
   if (!regions.length) {
-    tableBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No areas match the selected filters.</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="13" class="text-center text-muted py-4">No areas match the selected filters.</td></tr>';
     return;
   }
 
   if (!currentMatrixRows.length) {
-    tableBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No areas match the matrix controls.</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="13" class="text-center text-muted py-4">No areas match the matrix controls.</td></tr>';
     return;
   }
 
   tableBody.innerHTML = currentMatrixRows.map(area => {
     const width = Math.min(Math.max(area.phone_rate, 0), 100);
     const priority = priorityForArea(area);
-    const context = localContextForArea(area);
     return `
       <tr class="matrix-row" data-key="${escapeHtml(areaKey(area))}">
+        <td data-label="Area"><strong>${escapeHtml(area.commune)}</strong><small class="matrix-row-meta">${escapeHtml(area.location || gpsLabel(area))}</small></td>
         <td data-label="P-code"><code>${escapeHtml(area.pcode || 'Manual')}</code></td>
         <td data-label="Region">${escapeHtml(area.region)}</td>
         <td data-label="Department">${escapeHtml(area.department)}</td>
-        <td data-label="Arrondissement">${escapeHtml(area.commune)}</td>
-        <td data-label="GPS"><code>${gpsLabel(area)}</code></td>
-        <td data-label="Phone owners">${formatNumber(area.phone_owners)}</td>
         <td data-label="Population">${formatNumber(area.population)}</td>
+        <td data-label="Phone owners">${formatNumber(area.phone_owners)}</td>
+        <td data-label="Subscriptions">${formatNumber(area.estimated_mobile_subscriptions || Math.round(area.phone_owners * 1.08))}</td>
         <td data-label="Ownership rate"><div class="progress ownership-progress"><div class="progress-bar" style="width:${width.toFixed(1)}%">${formatRate(area.phone_rate)}</div></div></td>
         <td data-label="Confidence">
-          <span class="confidence-pill">${Math.round(area.confidence * 100)}%</span>
-          <button class="row-action matrix-profile-action" data-key="${escapeHtml(areaKey(area))}" title="Open area profile"><i data-lucide="arrow-right"></i></button>
-          <small class="matrix-row-meta">${priority ? priority.priority_score.toFixed(0) : '0'} priority &middot; ${context.localAssets.length} assets</small>
+          <span class="confidence-pill">${escapeHtml(area.confidence_level || `${Math.round(area.confidence * 100)}%`)}</span>
+          <small class="matrix-row-meta">${Math.round(area.confidence * 100)}% confidence</small>
+        </td>
+        <td data-label="Opportunity"><span class="priority-badge priority-${(area.opportunity_level || 'Medium').toLowerCase()}">${escapeHtml(area.opportunity_level || 'Medium')} ${Number(area.opportunity_score || 0).toFixed(0)}</span></td>
+        <td data-label="Priority"><span class="priority-badge priority-${escapeHtml((priority?.priority_label || area.priority_label || 'Watch').toLowerCase())}">${Number(priority?.priority_score || area.priority_score || 0).toFixed(0)}</span></td>
+        <td data-label="Recommended action">${escapeHtml(area.recommended_action || areaActionText(area, localContextForArea(area)))}</td>
+        <td data-label="Actions">
+          <div class="ticket-actions">
+            <button class="row-action matrix-profile-action" data-action="profile" data-key="${escapeHtml(areaKey(area))}" title="Open area profile"><i data-lucide="arrow-right"></i></button>
+            <button class="row-action matrix-area-action" data-action="campaign" data-key="${escapeHtml(areaKey(area))}" title="Create campaign"><i data-lucide="clipboard-plus"></i></button>
+            <button class="row-action matrix-area-action" data-action="decision" data-key="${escapeHtml(areaKey(area))}" title="Create decision"><i data-lucide="file-plus-2"></i></button>
+            <button class="row-action matrix-area-action" data-action="report" data-key="${escapeHtml(areaKey(area))}" title="Mark for validation"><i data-lucide="badge-check"></i></button>
+          </div>
         </td>
       </tr>
     `;
@@ -789,9 +969,20 @@ function renderRegions(regions) {
   document.querySelectorAll('.matrix-row').forEach(row => {
     row.addEventListener('click', () => {
       const area = allStats.find(item => areaKey(item) === row.dataset.key);
-      if (area) selectArea(area);
+      if (area) {
+        renderMatrixDetailPanel(area);
+        selectArea(area, null);
+      }
     });
   });
+  document.querySelectorAll('.matrix-area-action').forEach(button => {
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      const area = allStats.find(item => areaKey(item) === button.dataset.key);
+      if (area) prepareAreaAction(button.dataset.action, area);
+    });
+  });
+  if (currentMatrixRows[0]) renderMatrixDetailPanel(currentMatrixRows[0]);
   if (window.lucide) lucide.createIcons();
 }
 
@@ -799,6 +990,12 @@ function applyMatrixControls(regions) {
   const query = (matrixSearch?.value || '').trim().toLowerCase();
   const ownership = matrixOwnershipFilter?.value || 'all';
   const confidence = matrixConfidenceFilter?.value || 'all';
+  const opportunity = matrixOpportunityFilter?.value || 'all';
+  const validation = matrixValidationFilter?.value || 'all';
+  const projectCoverage = matrixProjectFilter?.value || 'all';
+  const minPopulation = Number(matrixMinPopulation?.value || 0);
+  const minPriority = matrixMinPriority?.value ? Number(matrixMinPriority.value) : null;
+  const maxPriority = matrixMaxPriority?.value ? Number(matrixMaxPriority.value) : null;
   const sort = matrixSort?.value || 'priority';
 
   return regions.filter(area => {
@@ -812,13 +1009,21 @@ function applyMatrixControls(regions) {
     if (confidence === 'low' && area.confidence >= 0.68) return false;
     if (confidence === 'medium' && (area.confidence < 0.68 || area.confidence > 0.78)) return false;
     if (confidence === 'high' && area.confidence <= 0.78) return false;
+    if (opportunity !== 'all' && String(area.opportunity_level || '').toLowerCase() !== opportunity) return false;
+    if (validation === 'needs' && !area.needs_validation) return false;
+    if (validation === 'covered' && area.needs_validation) return false;
+    if (projectCoverage === 'linked' && !(area.project_count || area.site_count || area.campaign_count)) return false;
+    if (projectCoverage === 'unlinked' && (area.project_count || area.site_count || area.campaign_count)) return false;
+    if (minPopulation && area.population < minPopulation) return false;
+    if (minPriority !== null && Number(area.priority_score || priorityForArea(area)?.priority_score || 0) < minPriority) return false;
+    if (maxPriority !== null && Number(area.priority_score || priorityForArea(area)?.priority_score || 0) > maxPriority) return false;
     return true;
   }).sort((a, b) => {
     if (sort === 'ownership-low') return a.phone_rate - b.phone_rate;
     if (sort === 'population-high') return b.population - a.population;
     if (sort === 'confidence-low') return a.confidence - b.confidence;
     if (sort === 'name') return a.commune.localeCompare(b.commune);
-    return (priorityForArea(b)?.priority_score || 0) - (priorityForArea(a)?.priority_score || 0);
+    return (b.priority_score || priorityForArea(b)?.priority_score || 0) - (a.priority_score || priorityForArea(a)?.priority_score || 0);
   });
 }
 
@@ -827,14 +1032,23 @@ function renderMatrixInsights(rows) {
   if (!target) return;
   const population = rows.reduce((sum, row) => sum + row.population, 0);
   const phoneOwners = rows.reduce((sum, row) => sum + row.phone_owners, 0);
+  const subscriptions = rows.reduce((sum, row) => sum + (row.estimated_mobile_subscriptions || Math.round(row.phone_owners * 1.08)), 0);
   const avgOwnership = population ? (phoneOwners / population) * 100 : 0;
-  const lowOwnership = rows.filter(row => row.phone_rate < 65).length;
-  const lowConfidence = rows.filter(row => row.confidence < 0.68).length;
+  const highOpportunity = rows.filter(row => Number(row.opportunity_score || 0) >= 68).length;
+  const lowConfidence = rows.filter(row => row.confidence < 0.68 || row.confidence_level === 'Low').length;
+  const validationCount = rows.filter(row => row.needs_validation).length;
+  const topRegion = rows.reduce((acc, row) => {
+    acc[row.region] = (acc[row.region] || 0) + Number(row.opportunity_score || 0);
+    return acc;
+  }, {});
+  const topRegionName = Object.entries(topRegion).sort((a, b) => b[1] - a[1])[0]?.[0] || 'None';
   target.innerHTML = `
-    <div class="metric-tile accent-bronze featured-metric"><span>Filtered areas</span><strong>${formatNumber(rows.length)}</strong><small>${formatNumber(population)} people in view</small></div>
-    <div class="metric-tile accent-green"><span>Average ownership</span><strong>${formatRate(avgOwnership)}</strong><small>${formatNumber(phoneOwners)} estimated phone owners</small></div>
-    <div class="metric-tile accent-gold"><span>Needs validation</span><strong>${lowConfidence}</strong><small>Low-confidence model rows</small></div>
-    <div class="metric-tile accent-red"><span>Access gap</span><strong>${lowOwnership}</strong><small>Under 65% ownership</small></div>
+    <div class="metric-tile accent-bronze featured-metric"><span>Total population analyzed</span><strong>${formatNumber(population)}</strong><small>${formatNumber(rows.length)} areas in view</small></div>
+    <div class="metric-tile accent-green"><span>Estimated phone owners</span><strong>${formatNumber(phoneOwners)}</strong><small>${formatRate(avgOwnership)} average ownership</small></div>
+    <div class="metric-tile accent-gold"><span>Mobile subscriptions</span><strong>${formatNumber(subscriptions)}</strong><small>Modeled active SIM/subscription footprint</small></div>
+    <div class="metric-tile accent-red"><span>Needs validation</span><strong>${validationCount}</strong><small>${lowConfidence} low-confidence areas</small></div>
+    <div class="metric-tile accent-green"><span>High opportunity</span><strong>${highOpportunity}</strong><small>Best areas for campaigns or decisions</small></div>
+    <div class="metric-tile accent-gold"><span>Top region</span><strong>${escapeHtml(topRegionName)}</strong><small>Highest opportunity score in current filter</small></div>
   `;
   renderMatrixActionLab(rows);
 }
@@ -876,6 +1090,61 @@ function renderMatrixActionLab(rows) {
   });
   document.getElementById('matrix-top-decision')?.addEventListener('click', () => {
     if (topRows[0]) prepareAreaAction('decision', topRows[0]);
+  });
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderMatrixDetailPanel(area) {
+  const target = document.getElementById('matrix-detail-panel');
+  if (!target || !area) return;
+  const assumptions = phoneMatrixDashboard?.assumptions || {
+    adult_share: 0.6,
+    national_adult_phone_ownership: 0.8,
+    mobile_subscriptions_per_person: 1.082,
+    assumption_version: 'KK-EVO-CMR-2026.05',
+  };
+  const regionalFactor = area.region === 'Centre' || area.region === 'Littoral' ? 1.24 : area.region === 'Ouest' ? 1.08 : 1;
+  const urbanFactor = Math.max(0.72, Math.min(1.22, 0.78 + Number(area.urban_signal || 0) * 0.44));
+  const maxOwners = Math.round(area.population * assumptions.adult_share * 0.95);
+  target.innerHTML = `
+    <div>
+      <p class="eyebrow">Selected area calculation</p>
+      <strong>${escapeHtml(area.commune)}, ${escapeHtml(area.department)}</strong>
+    </div>
+    <div class="probe-meta-grid">
+      <div><span>Population</span><strong>${formatNumber(area.population)}</strong></div>
+      <div><span>Adult share</span><strong>${Math.round(assumptions.adult_share * 100)}%</strong></div>
+      <div><span>Adult ownership</span><strong>${Math.round(assumptions.national_adult_phone_ownership * 100)}%</strong></div>
+      <div><span>Regional factor</span><strong>${regionalFactor.toFixed(2)}</strong></div>
+      <div><span>Urban/rural factor</span><strong>${urbanFactor.toFixed(2)}</strong></div>
+      <div><span>Estimated owners</span><strong>${formatNumber(area.phone_owners)}</strong></div>
+      <div><span>Max allowed</span><strong>${formatNumber(maxOwners)}</strong></div>
+      <div><span>Subscriptions</span><strong>${formatNumber(area.estimated_mobile_subscriptions || Math.round(area.phone_owners * assumptions.mobile_subscriptions_per_person))}</strong></div>
+    </div>
+    <div class="market-readout">
+      <p>Estimated phone owners = Population x adult share x ownership rate x regional factor x urban/rural factor, capped at Population x adult share x 0.95.</p>
+      <p>${escapeHtml(area.confidence_reason || 'These are intelligence estimates, not official measured phone ownership counts.')}</p>
+      <p>${escapeHtml(area.validation_reason || area.recommended_action || 'Review confidence and field proof before committing budget.')}</p>
+      <p>Assumption version: ${escapeHtml(assumptions.assumption_version)}. Changing assumptions affects future estimates; recalculate affected areas to update records.</p>
+    </div>
+    <div class="export-actions">
+      <button class="btn btn-outline-secondary btn-sm matrix-detail-action" data-action="campaign"><i data-lucide="clipboard-plus"></i> Campaign</button>
+      <button class="btn btn-outline-secondary btn-sm matrix-detail-action" data-action="site"><i data-lucide="map-pin-plus"></i> Site</button>
+      <button class="btn btn-outline-secondary btn-sm matrix-detail-action" data-action="decision"><i data-lucide="file-plus-2"></i> Decision</button>
+      <button class="btn btn-outline-secondary btn-sm matrix-detail-action" data-action="report"><i data-lucide="badge-check"></i> Field validation</button>
+      <button class="btn btn-outline-secondary btn-sm" id="matrix-recalculate-selected"><i data-lucide="refresh-cw"></i> Recalculate selected</button>
+    </div>
+  `;
+  document.querySelectorAll('.matrix-detail-action').forEach(button => {
+    button.addEventListener('click', () => prepareAreaAction(button.dataset.action, area));
+  });
+  document.getElementById('matrix-recalculate-selected')?.addEventListener('click', async () => {
+    const logs = await fetchJson('/api/phone-matrix/recalculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'selected', region: area.region, department: area.department, commune: area.commune }),
+    });
+    setStatus(dataStatus, `${logs.length} recalculation log generated for ${area.commune}.`, 'success');
   });
   if (window.lucide) lucide.createIcons();
 }
@@ -1688,21 +1957,25 @@ function prepareAssetAction(action, asset) {
 
 function exportCurrentMatrixCsv() {
   const rows = currentMatrixRows.length ? currentMatrixRows : filteredStats();
-  const header = ['pcode', 'region', 'department', 'arrondissement', 'latitude', 'longitude', 'population', 'phone_owners', 'phone_rate', 'confidence', 'priority_score'];
+  const header = ['region', 'department', 'arrondissement', 'pcode', 'population', 'estimated_phone_owners', 'estimated_mobile_subscriptions', 'ownership_rate', 'confidence_level', 'opportunity_score', 'priority_score', 'recommended_action', 'needs_validation', 'data_source', 'last_updated'];
   const csvRows = rows.map(area => {
     const priority = priorityForArea(area);
     return [
-      area.pcode || '',
       area.region,
       area.department,
       area.commune,
-      area.latitude,
-      area.longitude,
+      area.pcode || '',
       area.population,
       area.phone_owners,
-      area.phone_rate.toFixed(2),
-      area.confidence.toFixed(3),
-      priority ? priority.priority_score.toFixed(2) : '0',
+      area.estimated_mobile_subscriptions || Math.round(area.phone_owners * 1.08),
+      area.phone_rate?.toFixed(2),
+      area.confidence_level || confidenceLabel(area.confidence),
+      Number(area.opportunity_score || 0).toFixed(2),
+      Number(priority?.priority_score || area.priority_score || 0).toFixed(2),
+      area.recommended_action || '',
+      area.needs_validation ? 'yes' : 'no',
+      area.data_source || '',
+      area.updated_at || area.last_updated || '',
     ].map(value => `"${String(value).replaceAll('"', '""')}"`).join(',');
   });
   const blob = new Blob([[header.join(','), ...csvRows].join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -1738,10 +2011,10 @@ async function refreshData() {
   refreshButton.disabled = true;
   setStatus(dataStatus, 'Loading KK Evo intelligence layers...', 'info');
   try {
-    const [summary, overviewData, stats, workspaceData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
+    const [summary, overviewData, phoneMatrixData, workspaceData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
       fetchJson('/api/summary'),
       fetchJson('/api/overview'),
-      fetchJson('/api/stats'),
+      fetchJson('/api/phone-matrix'),
       fetchJson('/api/workspaces/dashboard'),
       fetchJson('/api/organizations'),
       fetchJson('/api/projects'),
@@ -1759,7 +2032,8 @@ async function refreshData() {
       fetchJson('/api/priority-zones'),
       fetchJson('/api/decision-report'),
     ]);
-    allStats = stats;
+    phoneMatrixDashboard = phoneMatrixData;
+    allStats = phoneMatrixData.rows.map(phoneMatrixRowToStat);
     nationalSummary = summary;
     overviewIntelligence = overviewData;
     workspaceDashboard = workspaceData;
@@ -1789,7 +2063,7 @@ async function refreshData() {
     renderIot();
     renderDecision(decisionData);
     updateView();
-    setStatus(dataStatus, `${stats.length} arrondissements, ${assets.length} assets, ${alerts.filter(a => a.status !== 'resolved').length} open alerts.`, 'success');
+    setStatus(dataStatus, `${allStats.length} arrondissements, ${assets.length} assets, ${alerts.filter(a => a.status !== 'resolved').length} open alerts.`, 'success');
   } catch (error) {
     console.error(error);
     setStatus(dataStatus, error.message || 'Unable to load intelligence layers.', 'danger');
@@ -2101,9 +2375,16 @@ refreshButton.addEventListener('click', refreshData);
 regionFilter.addEventListener('change', () => { buildFilterOptions(); updateView(); });
 departmentFilter.addEventListener('change', () => { buildFilterOptions(); updateView(); });
 communeFilter.addEventListener('change', updateView);
-[matrixSearch, matrixSort, matrixOwnershipFilter, matrixConfidenceFilter].forEach(control => {
+[matrixSearch, matrixSort, matrixOwnershipFilter, matrixConfidenceFilter, matrixOpportunityFilter, matrixValidationFilter, matrixProjectFilter, matrixMinPopulation, matrixMinPriority, matrixMaxPriority].forEach(control => {
   control?.addEventListener('input', updateView);
   control?.addEventListener('change', updateView);
+});
+[workspaceSearch, workspaceStatusFilter, workspaceTypeFilter].forEach(control => {
+  control?.addEventListener('input', renderWorkspaces);
+  control?.addEventListener('change', renderWorkspaces);
+});
+document.querySelectorAll('[data-workspace-jump]').forEach(button => {
+  button.addEventListener('click', () => document.getElementById(button.dataset.workspaceJump)?.focus());
 });
 [assetSearch, assetStatusFilter, assetTypeFilter].forEach(control => {
   control?.addEventListener('input', renderAssets);

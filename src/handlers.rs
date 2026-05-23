@@ -39,6 +39,53 @@ pub(crate) async fn list_stats(pool: web::Data<PgPool>) -> impl Responder {
     }
 }
 
+#[get("/api/phone-matrix")]
+pub(crate) async fn phone_matrix(pool: web::Data<PgPool>) -> impl Responder {
+    match build_phone_matrix(pool.get_ref()).await {
+        Ok(matrix) => HttpResponse::Ok().json(matrix),
+        Err(err) => {
+            eprintln!("Failed to build phone matrix: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/phone-matrix/detail")]
+pub(crate) async fn phone_matrix_detail(
+    pool: web::Data<PgPool>,
+    query: web::Query<PhoneMatrixDetailQuery>,
+) -> impl Responder {
+    match build_phone_matrix_detail(pool.get_ref(), &query).await {
+        Ok(Some(detail)) => HttpResponse::Ok().json(detail),
+        Ok(None) => HttpResponse::NotFound().json(ApiError {
+            message: "Phone Matrix area not found.".into(),
+        }),
+        Err(err) => {
+            eprintln!("Failed to build phone matrix detail: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/phone-matrix/assumptions")]
+pub(crate) async fn phone_matrix_assumption_list() -> impl Responder {
+    HttpResponse::Ok().json(phone_matrix_assumptions())
+}
+
+#[post("/api/phone-matrix/recalculate")]
+pub(crate) async fn phone_matrix_recalculate(
+    pool: web::Data<PgPool>,
+    payload: web::Json<PhoneMatrixRecalculateRequest>,
+) -> impl Responder {
+    match recalculate_phone_matrix(pool.get_ref(), &payload).await {
+        Ok(logs) => HttpResponse::Ok().json(logs),
+        Err(err) => {
+            eprintln!("Failed to recalculate phone matrix: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 #[post("/api/stats/update")]
 pub(crate) async fn update_stats(
     pool: web::Data<PgPool>,
@@ -109,34 +156,13 @@ pub(crate) async fn update_stats(
 
 #[get("/api/workspaces/dashboard")]
 pub(crate) async fn workspace_dashboard(pool: web::Data<PgPool>) -> impl Responder {
-    let health = match build_workspace_health(pool.get_ref()).await {
-        Ok(value) => value,
+    match build_workspace_dashboard(pool.get_ref()).await {
+        Ok(dashboard) => HttpResponse::Ok().json(dashboard),
         Err(err) => {
-            eprintln!("Failed to build workspace health: {}", err);
-            return HttpResponse::InternalServerError().finish();
+            eprintln!("Failed to build workspace dashboard: {}", err);
+            HttpResponse::InternalServerError().finish()
         }
-    };
-
-    HttpResponse::Ok().json(WorkspaceDashboard {
-        health,
-        organizations: fetch_organizations(pool.get_ref())
-            .await
-            .unwrap_or_default(),
-        projects: fetch_projects(pool.get_ref()).await.unwrap_or_default(),
-        sites: fetch_site_profiles(pool.get_ref())
-            .await
-            .unwrap_or_default(),
-        campaigns: fetch_survey_campaigns(pool.get_ref())
-            .await
-            .unwrap_or_default(),
-        recent_decisions: fetch_decision_snapshots(pool.get_ref())
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .take(8)
-            .collect(),
-        market_realities: market_realities(),
-    })
+    }
 }
 
 #[get("/api/site-profiles")]
@@ -306,6 +332,49 @@ pub(crate) async fn create_survey_campaign(
     }
 }
 
+#[patch("/api/survey-campaigns/{id}/status")]
+pub(crate) async fn update_survey_campaign_status(
+    pool: web::Data<PgPool>,
+    path: web::Path<i64>,
+    payload: web::Json<SurveyCampaignStatusRequest>,
+) -> impl Responder {
+    let allowed = [
+        "draft",
+        "ready",
+        "in_field",
+        "reviewing",
+        "completed",
+        "paused",
+        "cancelled",
+        "active",
+    ];
+    if !allowed.contains(&payload.status.as_str()) {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Unsupported campaign status.".into(),
+        });
+    }
+
+    let result = sqlx::query("UPDATE survey_campaigns SET status = $1 WHERE id = $2")
+        .bind(&payload.status)
+        .bind(*path)
+        .execute(pool.get_ref())
+        .await;
+
+    match result {
+        Ok(_) => match fetch_survey_campaigns(pool.get_ref()).await {
+            Ok(campaigns) => HttpResponse::Ok().json(campaigns),
+            Err(err) => {
+                eprintln!("Failed to return survey campaigns: {}", err);
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        Err(err) => {
+            eprintln!("Failed to update survey campaign status: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 #[get("/api/decision-snapshots")]
 pub(crate) async fn list_decision_snapshots(pool: web::Data<PgPool>) -> impl Responder {
     match fetch_decision_snapshots(pool.get_ref()).await {
@@ -362,7 +431,7 @@ pub(crate) async fn create_decision_snapshot(
         .clone()
         .unwrap_or_else(|| "not_started".into());
     let rationale = payload.rationale.clone().unwrap_or_else(|| {
-        "Decision created from InfraPulse workspace data; enrich with field evidence before final approval.".into()
+        "Decision created from KK Evo workspace data; enrich with field evidence before final approval.".into()
     });
     let next_action = payload.next_action.clone().unwrap_or_else(|| {
         "Review field evidence, confirm budget, then schedule execution.".into()
@@ -1217,7 +1286,7 @@ pub(crate) async fn decision_report(pool: web::Data<PgPool>) -> impl Responder {
     };
 
     HttpResponse::Ok().json(DecisionReport {
-        generated_for: "InfraPulse Cameroon MVP".into(),
+        generated_for: "KK Evo Cameroon intelligence platform".into(),
         summary: report_summary,
         open_alerts,
         monitored_assets: assets.len() as i64,
@@ -1268,7 +1337,7 @@ pub(crate) async fn export_assets(pool: web::Data<PgPool>) -> impl Responder {
         .append_header(("Content-Type", "text/csv; charset=utf-8"))
         .append_header((
             "Content-Disposition",
-            "attachment; filename=\"infrapulse-assets.csv\"",
+            "attachment; filename=\"kk-evo-assets.csv\"",
         ))
         .body(csv)
 }
@@ -1309,7 +1378,7 @@ pub(crate) async fn export_tickets(pool: web::Data<PgPool>) -> impl Responder {
         .append_header(("Content-Type", "text/csv; charset=utf-8"))
         .append_header((
             "Content-Disposition",
-            "attachment; filename=\"infrapulse-tickets.csv\"",
+            "attachment; filename=\"kk-evo-tickets.csv\"",
         ))
         .body(csv)
 }
@@ -1347,7 +1416,46 @@ pub(crate) async fn export_priority_zones(pool: web::Data<PgPool>) -> impl Respo
         .append_header(("Content-Type", "text/csv; charset=utf-8"))
         .append_header((
             "Content-Disposition",
-            "attachment; filename=\"infrapulse-priority-zones.csv\"",
+            "attachment; filename=\"kk-evo-priority-zones.csv\"",
+        ))
+        .body(csv)
+}
+
+#[get("/api/export/phone-matrix.csv")]
+pub(crate) async fn export_phone_matrix(pool: web::Data<PgPool>) -> impl Responder {
+    let matrix = match build_phone_matrix(pool.get_ref()).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to export phone matrix: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let mut csv = String::from("region,department,arrondissement,pcode,population,estimated_phone_owners,estimated_mobile_subscriptions,ownership_rate,confidence_level,opportunity_score,priority_score,recommended_action,needs_validation,data_source,last_updated\n");
+    for row in matrix.rows {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{:.2},{},{:.2},{:.2},{},{},{},{}\n",
+            csv_escape(&row.region),
+            csv_escape(&row.department),
+            csv_escape(&row.commune),
+            csv_escape(row.pcode.as_deref().unwrap_or("")),
+            row.population,
+            row.estimated_phone_owners,
+            row.estimated_mobile_subscriptions,
+            row.ownership_rate,
+            csv_escape(&row.confidence_level),
+            row.opportunity_score,
+            row.priority_score,
+            csv_escape(&row.recommended_action),
+            row.needs_validation,
+            csv_escape(&row.data_source),
+            csv_escape(&row.last_updated)
+        ));
+    }
+    HttpResponse::Ok()
+        .append_header(("Content-Type", "text/csv; charset=utf-8"))
+        .append_header((
+            "Content-Disposition",
+            "attachment; filename=\"kk-evo-phone-matrix.csv\"",
         ))
         .body(csv)
 }

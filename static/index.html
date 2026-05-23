@@ -190,6 +190,16 @@
           <div id="workspace-templates" class="template-grid"></div>
         </section>
 
+        <section class="surface mb-4">
+          <div class="surface-header">
+            <div>
+              <p class="eyebrow">Activity log</p>
+              <h2>Workspace activity</h2>
+            </div>
+          </div>
+          <div id="workspace-activity" class="list-stack"></div>
+        </section>
+
         <div class="summary-grid" id="signal-probe-health"></div>
         <div class="editor-grid">
           <div class="surface">
@@ -207,6 +217,11 @@
                 <option value="solar_operator">Solar operator</option>
                 <option value="water_operator">Water operator</option>
                 <option value="telecom">Telecom</option>
+                <option value="development_agency">Development agency</option>
+                <option value="university_research">University / Research</option>
+                <option value="private_company">Private company</option>
+                <option value="government_program">Government program</option>
+                <option value="other">Other</option>
               </select>
               <input class="form-control mb-2" id="organizationContactName" placeholder="Contact name" />
               <input type="email" class="form-control mb-2" id="organizationContactEmail" placeholder="Contact email" />
@@ -229,7 +244,13 @@
                 <option value="water">Water</option>
                 <option value="solar">Solar</option>
                 <option value="connectivity">Connectivity</option>
+                <option value="phone_access">Phone Access</option>
                 <option value="public_assets">Public assets</option>
+                <option value="agriculture">Agriculture</option>
+                <option value="health_clinics">Health / Clinics</option>
+                <option value="education_schools">Education / Schools</option>
+                <option value="research">Research</option>
+                <option value="general_infrastructure">General Infrastructure Intelligence</option>
               </select>
               <input class="form-control mb-2" id="projectRegion" placeholder="Region" />
               <select class="form-select mb-2" id="projectStatus">
@@ -237,6 +258,8 @@
                 <option value="active">Active</option>
                 <option value="paused">Paused</option>
                 <option value="completed">Completed</option>
+                <option value="blocked">Blocked</option>
+                <option value="archived">Archived</option>
               </select>
               <input type="date" class="form-control mb-2" id="projectStartDate" />
               <button class="btn btn-primary w-100"><i data-lucide="save"></i> Save project</button>
@@ -249,6 +272,32 @@
                 <p class="eyebrow">Client portfolio</p>
                 <h2>Organizations and projects</h2>
               </div>
+              <button class="btn btn-outline-secondary btn-sm" data-workspace-jump="organizationName"><i data-lucide="plus"></i> Create</button>
+            </div>
+            <div class="matrix-toolbar compact-toolbar">
+              <input class="form-control" id="workspaceSearch" placeholder="Search organizations, projects, sites, campaigns" />
+              <select class="form-select" id="workspaceStatusFilter">
+                <option value="all">All statuses</option>
+                <option value="planning">Planning</option>
+                <option value="active">Active</option>
+                <option value="paused">Paused</option>
+                <option value="completed">Completed</option>
+                <option value="blocked">Blocked</option>
+                <option value="archived">Archived</option>
+              </select>
+              <select class="form-select" id="workspaceTypeFilter">
+                <option value="all">All organization types</option>
+                <option value="municipal_council">Municipal Council</option>
+                <option value="ngo">NGO</option>
+                <option value="telecom">Telecom Company</option>
+                <option value="solar_operator">Solar Company</option>
+                <option value="water_operator">Water Infrastructure Company</option>
+                <option value="development_agency">Development Agency</option>
+                <option value="university_research">University / Research</option>
+                <option value="private_company">Private Company</option>
+                <option value="government_program">Government Program</option>
+                <option value="other">Other</option>
+              </select>
             </div>
             <div id="organizations-list" class="list-stack mb-2"></div>
             <div id="projects-list" class="list-stack"></div>
@@ -268,11 +317,18 @@
               <input class="form-control mb-2" id="siteName" placeholder="Site name" required />
               <select class="form-select mb-2" id="siteType">
                 <option value="water_cluster">Water cluster</option>
+                <option value="water_point">Water Point</option>
                 <option value="clinic">Clinic</option>
                 <option value="school">School</option>
+                <option value="solar_site">Solar Site</option>
+                <option value="telecom_probe_site">Telecom Probe Site</option>
                 <option value="tower">Tower or relay</option>
                 <option value="market">Market</option>
+                <option value="community_center">Community Center</option>
+                <option value="council_facility">Council Facility</option>
+                <option value="agricultural_site">Agricultural Site</option>
                 <option value="public_asset">Public asset</option>
+                <option value="other">Other</option>
               </select>
               <input class="form-control mb-2" id="siteRegion" placeholder="Region" required />
               <input class="form-control mb-2" id="siteDepartment" placeholder="Department" required />
@@ -331,9 +387,13 @@
               </select>
               <select class="form-select mb-2" id="campaignStatus">
                 <option value="draft">Draft</option>
+                <option value="ready">Ready</option>
+                <option value="in_field">In Field</option>
+                <option value="reviewing">Reviewing</option>
                 <option value="active">Active</option>
                 <option value="paused">Paused</option>
                 <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
               </select>
               <label class="checkbox-row mb-2"><input type="checkbox" id="campaignOffline" checked /> Offline capture</label>
               <div class="row g-2 mb-2">
@@ -423,6 +483,7 @@
             <div class="export-actions">
               <button class="btn btn-outline-secondary btn-sm" id="matrix-export-button"><i data-lucide="download"></i> Filtered CSV</button>
               <a class="btn btn-outline-secondary btn-sm" href="/api/export/priority-zones.csv"><i data-lucide="file-down"></i> Priority CSV</a>
+              <a class="btn btn-outline-secondary btn-sm" href="/api/export/phone-matrix.csv"><i data-lucide="file-down"></i> Matrix CSV</a>
             </div>
           </div>
           <div class="matrix-toolbar">
@@ -446,21 +507,47 @@
               <option value="medium">Medium confidence</option>
               <option value="high">High confidence</option>
             </select>
+            <select class="form-select" id="matrixOpportunityFilter">
+              <option value="all">All opportunities</option>
+              <option value="high">High opportunity</option>
+              <option value="medium">Medium opportunity</option>
+              <option value="low">Low opportunity</option>
+            </select>
+            <select class="form-select" id="matrixValidationFilter">
+              <option value="all">All validation states</option>
+              <option value="needs">Needs field validation</option>
+              <option value="covered">Has validation coverage</option>
+            </select>
+            <select class="form-select" id="matrixProjectFilter">
+              <option value="all">All workspace coverage</option>
+              <option value="linked">Linked to workspace</option>
+              <option value="unlinked">Not linked yet</option>
+            </select>
+          </div>
+          <div class="matrix-toolbar compact-toolbar">
+            <input type="number" class="form-control" id="matrixMinPopulation" placeholder="Min population" />
+            <input type="number" class="form-control" id="matrixMinPriority" placeholder="Min priority score" />
+            <input type="number" class="form-control" id="matrixMaxPriority" placeholder="Max priority score" />
           </div>
           <div id="matrix-action-lab" class="matrix-action-lab"></div>
+          <div id="matrix-detail-panel" class="dossier-intelligence"></div>
           <div class="table-responsive">
             <table class="table table-hover align-middle">
               <thead>
                 <tr>
+                  <th>Area</th>
                   <th>P-code</th>
                   <th>Region</th>
                   <th>Department</th>
-                  <th>Arrondissement</th>
-                  <th>GPS</th>
-                  <th>Phone owners</th>
                   <th>Population</th>
+                  <th>Phone owners</th>
+                  <th>Subscriptions</th>
                   <th>Ownership rate</th>
                   <th>Confidence</th>
+                  <th>Opportunity</th>
+                  <th>Priority</th>
+                  <th>Recommended action</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody id="regions-table-body"></tbody>

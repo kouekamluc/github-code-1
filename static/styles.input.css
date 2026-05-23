@@ -1039,13 +1039,19 @@
     color: #173824;
   }
 
+  .priority-low {
+    border-color: rgba(31, 74, 52, 0.20);
+    background: #eef5ea;
+    color: #173824;
+  }
+
   .table-responsive {
     @apply max-h-[760px] w-full overflow-auto;
   }
 
   .table {
     @apply w-full border-separate border-spacing-0 text-sm;
-    min-width: 1040px;
+    min-width: 1520px;
   }
 
   .table thead th {

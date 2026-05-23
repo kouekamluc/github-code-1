@@ -344,7 +344,7 @@ function renderSummary(summary, overview = overviewIntelligence) {
   }
 
   summaryCards.innerHTML = `
-    <div class="metric-tile accent-blue featured-metric">
+    <div class="metric-tile accent-bronze featured-metric">
       <span>Estimated phone owners</span>
       <strong>${formatNumber(summary.total_phone_owners)}</strong>
       <small>Modeled across ${summary.estimated_location_count} arrondissements</small>
@@ -486,7 +486,7 @@ function renderAreaProfile(area = selectedArea) {
       <span class="priority-badge priority-${escapeHtml((localPriority?.priority_label || 'Watch').toLowerCase())}">${escapeHtml(localPriority?.priority_label || 'Watch')}</span>
     </div>
     <div class="profile-grid-inner">
-      <div class="metric-tile accent-blue"><span>Population</span><strong>${formatNumber(area.population)}</strong><small>Matrix or measured</small></div>
+      <div class="metric-tile accent-bronze"><span>Population</span><strong>${formatNumber(area.population)}</strong><small>Matrix or measured</small></div>
       <div class="metric-tile accent-green"><span>Phone owners</span><strong>${formatNumber(area.phone_owners)}</strong><small>${formatRate(area.phone_rate)} ownership</small></div>
       <div class="metric-tile accent-gold"><span>Confidence</span><strong>${Math.round(area.confidence * 100)}%</strong><small>${escapeHtml(area.metric_source)}</small></div>
       <div class="metric-tile accent-red"><span>Priority score</span><strong>${localPriority ? localPriority.priority_score.toFixed(0) : '0'}</strong><small>${localAlerts.length} alerts / ${localTickets.length} active tickets</small></div>
@@ -617,7 +617,7 @@ function renderWorkspaces() {
   const healthTarget = document.getElementById('workspace-health');
   if (healthTarget && health) {
     healthTarget.innerHTML = `
-      <div class="metric-tile accent-blue featured-metric"><span>Projects</span><strong>${health.projects}</strong><small>${health.organizations} client workspaces</small></div>
+      <div class="metric-tile accent-bronze featured-metric"><span>Projects</span><strong>${health.projects}</strong><small>${health.organizations} client workspaces</small></div>
       <div class="metric-tile accent-green"><span>Field sites</span><strong>${health.sites}</strong><small>Physical proof layer</small></div>
       <div class="metric-tile accent-gold"><span>Campaigns</span><strong>${health.campaigns}</strong><small>Offline survey plans</small></div>
       <div class="metric-tile accent-red"><span>Decision records</span><strong>${health.decision_snapshots}</strong><small>${health.active_tickets} active tickets</small></div>
@@ -829,7 +829,7 @@ function renderMatrixInsights(rows) {
   const lowOwnership = rows.filter(row => row.phone_rate < 65).length;
   const lowConfidence = rows.filter(row => row.confidence < 0.68).length;
   target.innerHTML = `
-    <div class="metric-tile accent-blue featured-metric"><span>Filtered areas</span><strong>${formatNumber(rows.length)}</strong><small>${formatNumber(population)} people in view</small></div>
+    <div class="metric-tile accent-bronze featured-metric"><span>Filtered areas</span><strong>${formatNumber(rows.length)}</strong><small>${formatNumber(population)} people in view</small></div>
     <div class="metric-tile accent-green"><span>Average ownership</span><strong>${formatRate(avgOwnership)}</strong><small>${formatNumber(phoneOwners)} estimated phone owners</small></div>
     <div class="metric-tile accent-gold"><span>Needs validation</span><strong>${lowConfidence}</strong><small>Low-confidence model rows</small></div>
     <div class="metric-tile accent-red"><span>Access gap</span><strong>${lowOwnership}</strong><small>Under 65% ownership</small></div>
@@ -930,7 +930,7 @@ function updateMapMarkers(stats) {
     if (!isInCameroon(area.latitude, area.longitude)) return;
     const marker = L.circleMarker([area.latitude, area.longitude], {
       radius: Math.max(6, Math.min(15, area.phone_rate / 7)),
-      fillColor: area.phone_rate >= 78 ? '#2f855a' : area.phone_rate >= 64 ? '#2563eb' : '#b93826',
+      fillColor: area.phone_rate >= 78 ? '#1f4a34' : area.phone_rate >= 64 ? '#8a6a2f' : '#8b4a2f',
       color: '#fff',
       weight: 2,
       opacity: 1,
@@ -1043,7 +1043,7 @@ function renderSignalProbeHealth() {
   const target = document.getElementById('signal-probe-health');
   if (!target || !signalProbeDashboard) return;
   target.innerHTML = `
-    <div class="metric-tile accent-blue featured-metric"><span>Total probes</span><strong>${signalProbeDashboard.total_probes}</strong><small>${signalProbeDashboard.online_probes} online across monitored sites</small></div>
+    <div class="metric-tile accent-bronze featured-metric"><span>Total probes</span><strong>${signalProbeDashboard.total_probes}</strong><small>${signalProbeDashboard.online_probes} online across monitored sites</small></div>
     <div class="metric-tile accent-green"><span>Healthy online</span><strong>${signalProbeDashboard.online_probes}</strong><small>Ready for continued monitoring</small></div>
     <div class="metric-tile accent-gold"><span>Watch list</span><strong>${signalProbeDashboard.warning_probes}</strong><small>Need field or telemetry follow-up</small></div>
     <div class="metric-tile accent-red"><span>Critical/offline</span><strong>${signalProbeDashboard.critical_probes + signalProbeDashboard.offline_probes}</strong><small>${signalProbeDashboard.open_alerts} open alerts / ${signalProbeDashboard.active_tickets} active tickets</small></div>
@@ -1198,7 +1198,7 @@ function renderDecision(report) {
   renderExecutionBoard();
   document.getElementById('decision-report').innerHTML = `
     <div class="profile-grid-inner">
-      <div class="metric-tile accent-blue"><span>Monitored assets</span><strong>${report.monitored_assets}</strong><small>${report.open_alerts} open alerts</small></div>
+      <div class="metric-tile accent-bronze"><span>Monitored assets</span><strong>${report.monitored_assets}</strong><small>${report.open_alerts} open alerts</small></div>
       <div class="metric-tile accent-green"><span>Field reports</span><strong>${report.field_reports}</strong><small>Ground-truth submissions</small></div>
       <div class="metric-tile accent-gold"><span>Active tickets</span><strong>${report.active_tickets}</strong><small>${report.overdue_tickets} overdue</small></div>
       <div class="metric-tile accent-red"><span>Top zones</span><strong>${report.top_priority_zones.length}</strong><small>Ranked for action</small></div>
@@ -1224,7 +1224,7 @@ function renderDecisionBoard() {
   const blocked = decisionBoard.decisions.filter(decision => decision.decision_stage === 'blocked').length;
 
   healthTarget.innerHTML = `
-    <div class="metric-tile accent-blue featured-metric"><span>Pipeline budget</span><strong>${compactMoneyXaf(totalBudget)}</strong><small>${decisionBoard.decisions.length} decisions tracked</small></div>
+    <div class="metric-tile accent-bronze featured-metric"><span>Pipeline budget</span><strong>${compactMoneyXaf(totalBudget)}</strong><small>${decisionBoard.decisions.length} decisions tracked</small></div>
     <div class="metric-tile accent-green"><span>Approved or executing</span><strong>${approved}</strong><small>Ready to become field work</small></div>
     <div class="metric-tile accent-gold"><span>Evidence score</span><strong>${averageEvidence.toFixed(0)}</strong><small>Average proof readiness</small></div>
     <div class="metric-tile accent-red"><span>Blocked</span><strong>${blocked}</strong><small>Need owner or proof intervention</small></div>
@@ -1335,7 +1335,7 @@ function renderExecutionBoard() {
     : 0;
 
   healthTarget.innerHTML = `
-    <div class="metric-tile accent-blue featured-metric"><span>Execution budget</span><strong>${compactMoneyXaf(totalBudget)}</strong><small>${executionBoard.plans.length} execution plans</small></div>
+    <div class="metric-tile accent-bronze featured-metric"><span>Execution budget</span><strong>${compactMoneyXaf(totalBudget)}</strong><small>${executionBoard.plans.length} execution plans</small></div>
     <div class="metric-tile accent-green"><span>Ready/in progress</span><strong>${inMotion}</strong><small>Field work can move</small></div>
     <div class="metric-tile accent-gold"><span>Checklist completion</span><strong>${avgChecklist.toFixed(0)}%</strong><small>Cameroon readiness controls</small></div>
     <div class="metric-tile accent-red"><span>Blocked</span><strong>${blocked}</strong><small>Need owner intervention</small></div>
@@ -1674,7 +1674,7 @@ function initMap() {
 
 async function refreshData() {
   refreshButton.disabled = true;
-  setStatus(dataStatus, 'Loading InfraPulse intelligence layers...', 'info');
+  setStatus(dataStatus, 'Loading KK Evo intelligence layers...', 'info');
   try {
     const [summary, overviewData, stats, workspaceData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
       fetchJson('/api/summary'),

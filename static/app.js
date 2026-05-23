@@ -523,6 +523,7 @@ function renderAreaProfile(area = selectedArea) {
       <div class="export-actions">
         <button class="btn btn-outline-secondary btn-sm area-action" data-action="probe"><i data-lucide="radio-tower"></i> Probe</button>
         <button class="btn btn-outline-secondary btn-sm area-action" data-action="campaign"><i data-lucide="clipboard-plus"></i> Survey</button>
+        <button class="btn btn-outline-secondary btn-sm area-action" data-action="report"><i data-lucide="clipboard-check"></i> Report</button>
         <button class="btn btn-outline-secondary btn-sm area-action" data-action="site"><i data-lucide="map-pin-plus"></i> Site</button>
         <button class="btn btn-outline-secondary btn-sm area-action" data-action="decision"><i data-lucide="file-plus-2"></i> Decision</button>
       </div>
@@ -554,7 +555,7 @@ function renderAreaProfile(area = selectedArea) {
       <section class="surface nested-surface">
         <div class="surface-header"><div><p class="eyebrow">Monitored assets</p><h2>Assets</h2></div><span class="status-pill">${localAssets.length}</span></div>
         <div class="list-stack">${localAssets.length ? localAssets.map(asset => `
-          <article class="mini-card status-${escapeHtml(asset.status)}"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)} &middot; ${escapeHtml(probeHealthFor(asset)?.health_label || 'Not scored')}</span><p>${escapeHtml(asset.operator || 'No operator')} &middot; ${escapeHtml(asset.notes || 'No notes')}</p><div class="ticket-actions"><button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}">Telemetry</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}">Ticket</button></div></article>
+          <article class="mini-card status-${escapeHtml(asset.status)}"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)} &middot; ${escapeHtml(probeHealthFor(asset)?.health_label || 'Not scored')}</span><p>${escapeHtml(asset.operator || 'No operator')} &middot; ${escapeHtml(asset.notes || 'No notes')}</p><div class="ticket-actions"><button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}">Telemetry</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="report" data-id="${asset.id}">Report</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}">Ticket</button></div></article>
         `).join('') : '<div class="empty-state">No monitored assets here.</div>'}</div>
       </section>
       <section class="surface nested-surface">
@@ -612,6 +613,7 @@ function renderWorkspaces() {
       `<option value="${site.id}">${escapeHtml(site.name)} - ${escapeHtml(site.commune)}</option>`
     )).join('');
   }
+  populateAssetLinkedControls();
 
   const health = workspaceDashboard?.health;
   const healthTarget = document.getElementById('workspace-health');
@@ -885,6 +887,30 @@ function createOption(value, label) {
   return option;
 }
 
+function assetOptionLabel(asset) {
+  return `#${asset.id} ${asset.name} - ${asset.commune} (${asset.status})`;
+}
+
+function populateAssetLinkedControls() {
+  const reportSelect = document.getElementById('reportAssetId');
+  const alertSelect = document.getElementById('alertAssetId');
+  const iotSelect = document.getElementById('iotAssetId');
+  const options = assets.map(asset => `<option value="${asset.id}">${escapeHtml(assetOptionLabel(asset))}</option>`).join('');
+  if (reportSelect) reportSelect.innerHTML = '<option value="">No linked asset</option>' + options;
+  if (alertSelect) alertSelect.innerHTML = '<option value="">General coverage alert</option>' + options;
+  if (iotSelect) iotSelect.innerHTML = '<option value="">Select monitored probe or asset</option>' + options;
+}
+
+function fillTelemetryCoordinatesFromAsset() {
+  const asset = assets.find(item => item.id === Number(document.getElementById('iotAssetId')?.value));
+  if (!asset) return;
+  document.getElementById('iotLatitude').value = formatCoordinate(asset.latitude);
+  document.getElementById('iotLongitude').value = formatCoordinate(asset.longitude);
+  if (!document.getElementById('iotValue').value) {
+    document.getElementById('iotValue').value = asset.status === 'online' ? 82 : asset.status === 'warning' ? 54 : 22;
+  }
+}
+
 function populateFilter(select, values, selected) {
   select.innerHTML = '';
   select.appendChild(createOption('all', `All ${select.dataset.label}`));
@@ -1003,6 +1029,7 @@ function renderAssets() {
         <div class="ticket-actions">
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="profile" data-id="${asset.id}"><i data-lucide="map-pin"></i> Area</button>
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}"><i data-lucide="activity"></i> Telemetry</button>
+          <button class="btn btn-sm btn-outline-secondary asset-action" data-action="report" data-id="${asset.id}"><i data-lucide="clipboard-check"></i> Report</button>
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="alert" data-id="${asset.id}"><i data-lucide="triangle-alert"></i> Alert</button>
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}"><i data-lucide="wrench"></i> Ticket</button>
           <button class="btn btn-sm btn-success asset-status-action" data-status="online" data-id="${asset.id}"><i data-lucide="check"></i> Online</button>
@@ -1012,6 +1039,7 @@ function renderAssets() {
       </article>
     `;
   }).join('') : '<div class="empty-state">No signal probes match the current filters.</div>';
+  populateAssetLinkedControls();
 
   document.querySelectorAll('.asset-action').forEach(button => {
     button.addEventListener('click', () => {
@@ -1064,10 +1092,27 @@ function renderAlerts() {
   document.getElementById('alerts-list').innerHTML = alerts.map(alert => `
     <article class="list-card severity-${escapeHtml(alert.severity)}">
       <div><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span></div>
-      <button class="btn btn-sm btn-outline-secondary resolve-alert" data-id="${alert.id}">Resolve</button>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary alert-ticket-action" data-id="${alert.id}">Ticket</button>
+        <button class="btn btn-sm btn-outline-secondary resolve-alert" data-id="${alert.id}">Resolve</button>
+      </div>
       <p>${escapeHtml(alert.message)}</p>
     </article>
   `).join('');
+
+  document.querySelectorAll('.alert-ticket-action').forEach(button => {
+    button.addEventListener('click', () => {
+      const alert = alerts.find(item => item.id === Number(button.dataset.id));
+      if (!alert) return;
+      switchView('tickets');
+      document.getElementById('ticketAlertId').value = alert.id;
+      document.getElementById('ticketAssetId').value = alert.asset_id || '';
+      document.getElementById('ticketTitle').value = `${alert.title} follow-up`;
+      document.getElementById('ticketPriority').value = alert.severity === 'critical' ? 'urgent' : 'high';
+      document.getElementById('ticketAssignedTo').value = 'Coverage response team';
+      document.getElementById('ticketTitle').focus();
+    });
+  });
 
   document.querySelectorAll('.resolve-alert').forEach(button => {
     button.addEventListener('click', async () => {
@@ -1543,6 +1588,21 @@ function prepareAreaAction(action, area) {
     document.getElementById('campaignOffline').checked = true;
     document.getElementById('campaignName').focus();
   }
+  if (action === 'report') {
+    switchView('reports');
+    const localAsset = assets.find(asset => areaKey(asset) === areaKey(area));
+    document.getElementById('reportAssetId').value = localAsset?.id || '';
+    document.getElementById('reportType').value = area.confidence < 0.7 ? 'Phone access ground-truth check' : 'GPS/photo validation';
+    document.getElementById('reportRegion').value = area.region;
+    document.getElementById('reportDepartment').value = area.department;
+    document.getElementById('reportCommune').value = area.commune;
+    document.getElementById('reportLatitude').value = formatCoordinate(area.latitude);
+    document.getElementById('reportLongitude').value = formatCoordinate(area.longitude);
+    document.getElementById('reportStatus').value = area.confidence < 0.7 ? 'needs_followup' : 'verified';
+    document.getElementById('reportSubmittedBy').value = project?.organization_name || 'Field validation team';
+    document.getElementById('reportNotes').value = `Validate ${area.commune}: ${formatRate(area.phone_rate)} phone ownership, ${Math.round(area.confidence * 100)}% model confidence, ${formatNumber(area.population)} people.`;
+    document.getElementById('reportType').focus();
+  }
   if (action === 'decision') {
     const priority = priorityForArea(area);
     document.getElementById('decisionProject').value = project?.id || '';
@@ -1566,27 +1626,14 @@ function prepareAssetAction(action, asset) {
     return;
   }
   if (action === 'telemetry') {
-    const readingValue = asset.status === 'online' ? 82 : asset.status === 'warning' ? 54 : 18;
-    fetchJson('/api/iot/readings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_id: asset.project_id,
-        site_profile_id: asset.site_profile_id,
-        asset_id: asset.id,
-        reading_type: asset.asset_type === 'connectivity_probe' ? 'signal_quality' : 'asset_health',
-        value: readingValue,
-        unit: asset.asset_type === 'connectivity_probe' ? 'score' : 'percent',
-        latitude: asset.latitude,
-        longitude: asset.longitude,
-      }),
-    }).then(async data => {
-      readings = data;
-      signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
-      renderIot();
-      renderAssets();
-      setStatus(document.getElementById('asset-status'), `Telemetry logged for ${asset.name}.`, 'success');
-    }).catch(error => setStatus(document.getElementById('asset-status'), error.message, 'danger'));
+    switchView('iot');
+    document.getElementById('iotAssetId').value = asset.id;
+    document.getElementById('iotReadingType').value = asset.asset_type === 'connectivity_probe' ? 'signal_quality' : 'asset_health';
+    document.getElementById('iotValue').value = asset.status === 'online' ? 82 : asset.status === 'warning' ? 54 : 18;
+    document.getElementById('iotUnit').value = asset.asset_type === 'connectivity_probe' ? 'score' : 'percent';
+    document.getElementById('iotLatitude').value = formatCoordinate(asset.latitude);
+    document.getElementById('iotLongitude').value = formatCoordinate(asset.longitude);
+    document.getElementById('iotValue').focus();
     return;
   }
   if (action === 'alert') {
@@ -1612,6 +1659,21 @@ function prepareAssetAction(action, asset) {
       await refreshOverviewLayer();
       setStatus(document.getElementById('asset-status'), `Alert created for ${asset.name}.`, 'success');
     }).catch(error => setStatus(document.getElementById('asset-status'), error.message, 'danger'));
+    return;
+  }
+  if (action === 'report') {
+    switchView('reports');
+    document.getElementById('reportAssetId').value = asset.id;
+    document.getElementById('reportType').value = asset.status === 'online' ? 'Routine probe verification' : 'Signal probe exception check';
+    document.getElementById('reportRegion').value = asset.region;
+    document.getElementById('reportDepartment').value = asset.department;
+    document.getElementById('reportCommune').value = asset.commune;
+    document.getElementById('reportLatitude').value = formatCoordinate(asset.latitude);
+    document.getElementById('reportLongitude').value = formatCoordinate(asset.longitude);
+    document.getElementById('reportStatus').value = asset.status === 'online' ? 'verified' : 'needs_followup';
+    document.getElementById('reportSubmittedBy').value = asset.operator || 'Field validation team';
+    document.getElementById('reportNotes').value = `${asset.name} requires GPS/photo confirmation in ${asset.commune}. Current status: ${asset.status}.`;
+    document.getElementById('reportType').focus();
     return;
   }
   if (action === 'ticket') {
@@ -1647,7 +1709,7 @@ function exportCurrentMatrixCsv() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'infrapulse-filtered-phone-matrix.csv';
+  link.download = 'kk-evo-filtered-phone-matrix.csv';
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -1800,6 +1862,37 @@ document.getElementById('report-form').addEventListener('submit', async event =>
     event.target.reset();
   } catch (error) {
     setStatus(document.getElementById('report-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('alert-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const alertAsset = assets.find(asset => asset.id === Number(document.getElementById('alertAssetId').value));
+  const payload = {
+    project_id: alertAsset?.project_id || null,
+    site_profile_id: alertAsset?.site_profile_id || null,
+    asset_id: alertAsset?.id || null,
+    severity: document.getElementById('alertSeverity').value,
+    title: document.getElementById('alertTitle').value.trim(),
+    message: document.getElementById('alertMessage').value.trim(),
+  };
+  try {
+    alerts = await fetchJson('/api/alerts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+    priorityZones = await fetchJson('/api/priority-zones');
+    renderAlerts();
+    renderPriority();
+    renderAssets();
+    updateView();
+    await refreshOverviewLayer();
+    setStatus(document.getElementById('alert-status'), 'Alert created and added to the coverage queue.', 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('alert-status'), error.message, 'danger');
   }
 });
 
@@ -1962,6 +2055,43 @@ document.getElementById('ticket-form').addEventListener('submit', async event =>
   }
 });
 
+document.getElementById('iot-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const telemetryAsset = assets.find(asset => asset.id === Number(document.getElementById('iotAssetId').value));
+  if (!telemetryAsset) {
+    setStatus(document.getElementById('iot-status'), 'Select a monitored probe or asset first.', 'danger');
+    return;
+  }
+  const latitude = document.getElementById('iotLatitude').value;
+  const longitude = document.getElementById('iotLongitude').value;
+  const payload = {
+    project_id: telemetryAsset.project_id,
+    site_profile_id: telemetryAsset.site_profile_id,
+    asset_id: telemetryAsset.id,
+    reading_type: document.getElementById('iotReadingType').value,
+    value: Number(document.getElementById('iotValue').value),
+    unit: document.getElementById('iotUnit').value.trim(),
+    latitude: latitude ? Number(latitude) : telemetryAsset.latitude,
+    longitude: longitude ? Number(longitude) : telemetryAsset.longitude,
+  };
+  try {
+    readings = await fetchJson('/api/iot/readings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+    renderIot();
+    renderAssets();
+    updateView();
+    await refreshOverviewLayer();
+    setStatus(document.getElementById('iot-status'), `Telemetry saved for ${telemetryAsset.name}.`, 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('iot-status'), error.message, 'danger');
+  }
+});
+
 document.querySelectorAll('.tab-button').forEach(button => {
   button.addEventListener('click', () => switchView(button.dataset.view));
 });
@@ -1978,6 +2108,12 @@ communeFilter.addEventListener('change', updateView);
 [assetSearch, assetStatusFilter, assetTypeFilter].forEach(control => {
   control?.addEventListener('input', renderAssets);
   control?.addEventListener('change', renderAssets);
+});
+document.getElementById('iotAssetId')?.addEventListener('change', fillTelemetryCoordinatesFromAsset);
+document.getElementById('iotReadingType')?.addEventListener('change', event => {
+  const unit = document.getElementById('iotUnit');
+  if (!unit) return;
+  unit.value = ['uptime', 'battery_level', 'asset_health'].includes(event.target.value) ? 'percent' : 'score';
 });
 matrixExportButton?.addEventListener('click', exportCurrentMatrixCsv);
 window.addEventListener('load', () => { initMap(); refreshData(); });

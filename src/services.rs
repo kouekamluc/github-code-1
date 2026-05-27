@@ -250,6 +250,36 @@ pub(crate) async fn record_audit_event(
     Ok(())
 }
 
+pub(crate) async fn record_custom_audit_event(
+    pool: &PgPool,
+    entity_type: &str,
+    entity_id: i64,
+    field_name: &str,
+    old_value: Option<&str>,
+    new_value: Option<&str>,
+    actor: &str,
+    note: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            entity_type, entity_id, field_name, old_value, new_value, actor, note
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind(entity_type)
+    .bind(entity_id)
+    .bind(field_name)
+    .bind(old_value)
+    .bind(new_value)
+    .bind(actor)
+    .bind(note)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 pub(crate) async fn fetch_audit_events(
     pool: &PgPool,
     query: &AuditEventQuery,
@@ -277,6 +307,38 @@ pub(crate) async fn fetch_audit_events(
     .bind(&query.entity_type)
     .bind(query.entity_id)
     .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) async fn fetch_evidence_files(
+    pool: &PgPool,
+    entity_type: &str,
+    entity_id: i64,
+) -> Result<Vec<EvidenceFile>, sqlx::Error> {
+    sqlx::query_as::<_, EvidenceFile>(
+        r#"
+        SELECT
+            id,
+            entity_type,
+            entity_id,
+            file_name,
+            content_type,
+            storage_path,
+            sha256_hash,
+            file_size,
+            latitude,
+            longitude,
+            captured_at::TEXT AS captured_at,
+            uploaded_by,
+            created_at::TEXT AS created_at
+        FROM evidence_files
+        WHERE entity_type = $1 AND entity_id = $2
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(entity_type)
+    .bind(entity_id)
     .fetch_all(pool)
     .await
 }

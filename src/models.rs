@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::FromRow;
 
 #[derive(FromRow)]
@@ -101,6 +102,50 @@ pub(crate) struct AuditEventQuery {
     pub(crate) entity_type: Option<String>,
     pub(crate) entity_id: Option<i64>,
     pub(crate) limit: Option<i64>,
+}
+
+#[derive(Serialize, FromRow, Clone)]
+pub(crate) struct EvidenceFile {
+    pub(crate) id: i64,
+    pub(crate) entity_type: String,
+    pub(crate) entity_id: i64,
+    pub(crate) file_name: String,
+    pub(crate) content_type: String,
+    pub(crate) storage_path: String,
+    pub(crate) sha256_hash: String,
+    pub(crate) file_size: i64,
+    pub(crate) latitude: Option<f64>,
+    pub(crate) longitude: Option<f64>,
+    pub(crate) captured_at: Option<String>,
+    pub(crate) uploaded_by: String,
+    pub(crate) created_at: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EvidenceQuery {
+    pub(crate) entity_type: String,
+    pub(crate) entity_id: i64,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EvidenceUploadRequest {
+    pub(crate) entity_type: String,
+    pub(crate) entity_id: i64,
+    pub(crate) file_name: String,
+    pub(crate) content_type: String,
+    pub(crate) content_base64: String,
+    pub(crate) latitude: Option<f64>,
+    pub(crate) longitude: Option<f64>,
+    pub(crate) captured_at: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct EntityDetail {
+    pub(crate) entity_type: String,
+    pub(crate) entity_id: i64,
+    pub(crate) record: Value,
+    pub(crate) evidence: Vec<EvidenceFile>,
+    pub(crate) audit_events: Vec<AuditEvent>,
 }
 
 #[derive(Serialize)]

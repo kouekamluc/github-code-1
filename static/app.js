@@ -136,6 +136,128 @@ async function fetchJson(url, options = {}) {
   return body;
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function entityLabel(type) {
+  return {
+    organization: 'Organization',
+    project: 'Project',
+    site_profile: 'Site profile',
+    survey_campaign: 'Survey campaign',
+    infrastructure_asset: 'Asset',
+    field_report: 'Field report',
+    alert: 'Alert',
+    maintenance_ticket: 'Ticket',
+    decision_snapshot: 'Decision',
+    execution_plan: 'Execution plan',
+    operator_imei_event: 'IMEI event',
+  }[type] || type.replaceAll('_', ' ');
+}
+
+function detailTitle(type, record) {
+  return record?.title || record?.name || record?.report_type || record?.operator_name || `${entityLabel(type)} #${record?.id || ''}`;
+}
+
+function renderRecordFields(record) {
+  const hidden = new Set(['id', 'created_at', 'updated_at', 'resolved_at', 'last_checked_at', 'sha256_hash', 'storage_path']);
+  return Object.entries(record || {})
+    .filter(([key, value]) => !hidden.has(key) && value !== null && value !== undefined && value !== '')
+    .slice(0, 18)
+    .map(([key, value]) => `
+      <div>
+        <span>${escapeHtml(key.replaceAll('_', ' '))}</span>
+        <strong>${escapeHtml(typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value)}</strong>
+      </div>
+    `)
+    .join('');
+}
+
+function renderEvidenceList(files) {
+  if (!files?.length) return '<div class="empty-state">No evidence files attached yet.</div>';
+  return files.map(file => `
+    <article class="evidence-item">
+      <div>
+        <strong>${escapeHtml(file.file_name)}</strong>
+        <span>${escapeHtml(file.content_type)} &middot; ${formatBytes(file.file_size)} &middot; ${escapeHtml(file.uploaded_by)}</span>
+      </div>
+      <small>${escapeHtml(file.captured_at || file.created_at)}${file.latitude ? ` &middot; ${Number(file.latitude).toFixed(4)}, ${Number(file.longitude).toFixed(4)}` : ''}</small>
+    </article>
+  `).join('');
+}
+
+function renderAuditList(events) {
+  if (!events?.length) return '<div class="empty-state">No audit events for this record yet.</div>';
+  return events.map(event => `
+    <article class="audit-item">
+      <div>
+        <strong>${escapeHtml(event.field_name)}</strong>
+        <span>${escapeHtml(event.actor)} &middot; ${escapeHtml(event.created_at)}</span>
+      </div>
+      <p>${escapeHtml(event.note || `${event.old_value || 'empty'} -> ${event.new_value || 'empty'}`)}</p>
+    </article>
+  `).join('');
+}
+
+async function openEntityDetail(entityType, entityId) {
+  if (!entityId) return;
+  const panel = document.getElementById('entity-detail-panel');
+  const title = document.getElementById('entity-detail-title');
+  const subtitle = document.getElementById('entity-detail-subtitle');
+  const body = document.getElementById('entity-detail-body');
+  const evidence = document.getElementById('entity-evidence-list');
+  const audit = document.getElementById('entity-audit-list');
+  const form = document.getElementById('entity-evidence-form');
+  const status = document.getElementById('entity-evidence-status');
+  if (!panel || !title || !subtitle || !body || !evidence || !audit || !form) return;
+
+  panel.classList.add('is-open');
+  panel.setAttribute('aria-hidden', 'false');
+  title.textContent = 'Loading record...';
+  subtitle.textContent = `${entityLabel(entityType)} #${entityId}`;
+  body.innerHTML = '<div class="empty-state">Loading backend detail.</div>';
+  evidence.innerHTML = '';
+  audit.innerHTML = '';
+  status.innerHTML = '';
+  form.dataset.entityType = entityType;
+  form.dataset.entityId = entityId;
+
+  try {
+    const detail = await fetchJson(`/api/entities/${entityType}/${entityId}`);
+    title.textContent = detailTitle(detail.entity_type, detail.record);
+    subtitle.textContent = `${entityLabel(detail.entity_type)} #${detail.entity_id}`;
+    body.innerHTML = `<div class="entity-field-grid">${renderRecordFields(detail.record)}</div>`;
+    evidence.innerHTML = renderEvidenceList(detail.evidence);
+    audit.innerHTML = renderAuditList(detail.audit_events);
+  } catch (error) {
+    title.textContent = 'Detail unavailable';
+    body.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function closeEntityDetail() {
+  const panel = document.getElementById('entity-detail-panel');
+  if (!panel) return;
+  panel.classList.remove('is-open');
+  panel.setAttribute('aria-hidden', 'true');
+}
+
+function wireEntityDetailButtons(scope = document) {
+  scope.querySelectorAll('[data-entity-detail]').forEach(button => {
+    if (button.dataset.detailWired) return;
+    button.dataset.detailWired = 'true';
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openEntityDetail(button.dataset.entityType, button.dataset.entityId);
+    });
+  });
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -442,6 +564,7 @@ function renderAuthState() {
     if (activeButton?.dataset.navScope === 'auth') switchView('overview');
   }
   if (window.lucide) lucide.createIcons();
+  wireEntityDetailButtons();
 }
 
 function renderSummary(summary, overview = overviewIntelligence) {
@@ -867,7 +990,7 @@ function renderAreaProfile(area = selectedArea) {
       <section class="surface nested-surface">
         <div class="surface-header"><div><p class="eyebrow">Monitored assets</p><h2>Assets</h2></div><span class="status-pill">${localAssets.length}</span></div>
         <div class="list-stack">${localAssets.length ? localAssets.map(asset => `
-          <article class="mini-card clickable-card profile-asset-card status-${escapeHtml(asset.status)}" role="button" tabindex="0" data-id="${asset.id}"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)} &middot; ${escapeHtml(probeHealthFor(asset)?.health_label || 'Not scored')}</span><p>${escapeHtml(asset.operator || 'No operator')} &middot; ${escapeHtml(asset.notes || 'No notes')}</p><div class="ticket-actions"><button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}">Telemetry</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="report" data-id="${asset.id}">Report</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}">Ticket</button></div></article>
+          <article class="mini-card clickable-card profile-asset-card status-${escapeHtml(asset.status)}" role="button" tabindex="0" data-id="${asset.id}"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)} &middot; ${escapeHtml(probeHealthFor(asset)?.health_label || 'Not scored')}</span><p>${escapeHtml(asset.operator || 'No operator')} &middot; ${escapeHtml(asset.notes || 'No notes')}</p><div class="ticket-actions"><button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="infrastructure_asset" data-entity-id="${asset.id}">Details</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}">Telemetry</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="report" data-id="${asset.id}">Report</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}">Ticket</button></div></article>
         `).join('') : '<div class="empty-state">No monitored assets here.</div>'}</div>
       </section>
       <section class="surface nested-surface">
@@ -914,11 +1037,9 @@ function renderAreaProfile(area = selectedArea) {
       }
     });
   });
+  wireEntityDetailButtons();
   document.querySelectorAll('.profile-asset-card').forEach(card => {
-    const open = () => {
-      const asset = assets.find(item => item.id === Number(card.dataset.id));
-      if (asset) prepareAssetAction('profile', asset);
-    };
+    const open = () => openEntityDetail('infrastructure_asset', card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1037,13 +1158,16 @@ function renderWorkspaces() {
   document.getElementById('organizations-list').innerHTML = organizationRows.length ? organizationRows.map(item => {
     const organization = item.organization;
     return `
-    <article class="list-card clickable-card workspace-organization-card status-online" role="button" tabindex="0" data-search="${escapeHtml(organization.name)}">
+    <article class="list-card clickable-card workspace-organization-card status-online" role="button" tabindex="0" data-id="${organization.id}" data-search="${escapeHtml(organization.name)}">
       <div>
         <strong>${escapeHtml(organization.name)}</strong>
         <span>${escapeHtml(labelize(organization.org_type))} &middot; ${escapeHtml(organization.contact_name || 'No contact')}</span>
       </div>
       <span class="status-pill">Org #${organization.id}</span>
       <p>${escapeHtml(organization.contact_email || 'No email recorded')} &middot; ${item.project_count || 0} projects &middot; ${item.linked_site_count || 0} sites &middot; ${item.active_decision_count || 0} active decisions &middot; ${item.open_alert_count || 0} open alerts &middot; Last ${shortDate(item.last_activity || organization.created_at)}</p>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="organization" data-entity-id="${organization.id}">Details</button>
+      </div>
     </article>
   `;
   }).join('') : '<div class="empty-state">No organizations yet. Create the first client, partner, or operating organization.</div>';
@@ -1059,7 +1183,7 @@ function renderWorkspaces() {
   document.getElementById('projects-list').innerHTML = projectRows.length ? projectRows.map(item => {
     const project = item.project;
     return `
-    <article class="list-card clickable-card workspace-project-card status-${escapeHtml(project.status)}" role="button" tabindex="0" data-search="${escapeHtml(project.name)}">
+    <article class="list-card clickable-card workspace-project-card status-${escapeHtml(project.status)}" role="button" tabindex="0" data-id="${project.id}" data-search="${escapeHtml(project.name)}">
       <div>
         <strong>${escapeHtml(project.name)}</strong>
         <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(labelize(project.sector))}</span>
@@ -1067,6 +1191,9 @@ function renderWorkspaces() {
       <span class="status-pill">${escapeHtml(project.status)}</span>
       <p>${escapeHtml(project.region || 'National')} &middot; Starts ${shortDate(project.start_date)} &middot; ${item.site_count || 0} sites &middot; ${item.campaign_count || 0} campaigns &middot; ${item.decision_count || 0} decisions &middot; ${item.asset_count || 0} assets &middot; ${item.open_ticket_count || 0} open tickets &middot; ${Number(item.execution_readiness || 0).toFixed(0)}% ready</p>
       <p>${escapeHtml(item.recommended_next_action || 'Add proof and operational actions to improve readiness.')}</p>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="project" data-entity-id="${project.id}">Details</button>
+      </div>
     </article>
   `;
   }).join('') : '<div class="empty-state">No projects match the current filters.</div>';
@@ -1086,7 +1213,7 @@ function renderWorkspaces() {
         + (projectDecisions.length ? 20 : 0)
         + (projectTickets.length === 0 ? 12 : 6));
       return `
-        <article class="list-card clickable-card workspace-project-card" role="button" tabindex="0" data-search="${escapeHtml(project.name)}">
+        <article class="list-card clickable-card workspace-project-card" role="button" tabindex="0" data-id="${project.id}" data-search="${escapeHtml(project.name)}">
           <div>
             <strong>${escapeHtml(project.name)}</strong>
             <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(project.region || 'National')}</span>
@@ -1095,6 +1222,7 @@ function renderWorkspaces() {
           <div class="workspace-progress"><span style="width:${readiness}%"></span></div>
           <p>${projectSites.length} sites &middot; ${projectAssets.length} assets &middot; ${projectCampaigns.length} campaigns &middot; ${projectTickets.length} active tickets &middot; ${projectDecisions.length} decisions</p>
           <div class="ticket-actions">
+            <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="project" data-entity-id="${project.id}">Details</button>
             <button class="btn btn-sm btn-outline-secondary project-action" data-action="site" data-project="${project.id}">Site</button>
             <button class="btn btn-sm btn-outline-secondary project-action" data-action="campaign" data-project="${project.id}">Campaign</button>
             <button class="btn btn-sm btn-outline-secondary project-action" data-action="decision" data-project="${project.id}">Decision</button>
@@ -1138,6 +1266,7 @@ function renderWorkspaces() {
       <p>${escapeHtml(site.project_name || 'No project')} &middot; ${formatNumber(site.beneficiary_estimate || 0)} people &middot; ${item.linked_assets || 0} assets &middot; ${item.linked_reports || 0} reports &middot; ${item.linked_alerts || 0} alerts &middot; ${item.linked_tickets || 0} tickets</p>
       <p>${escapeHtml(site.access_notes || 'No access notes')} &middot; GPS ${gpsLabel(site)}</p>
       <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="site_profile" data-entity-id="${site.id}">Details</button>
         <button class="btn btn-sm btn-outline-secondary site-action" data-action="profile" data-site="${site.id}">Area</button>
         <button class="btn btn-sm btn-outline-secondary site-action" data-action="report" data-site="${site.id}">Report</button>
         <button class="btn btn-sm btn-outline-secondary site-action" data-action="probe" data-site="${site.id}">Probe</button>
@@ -1162,6 +1291,7 @@ function renderWorkspaces() {
       <p>${escapeHtml(campaign.project_name || 'No project')} &middot; ${escapeHtml(campaign.language_mode)} &middot; ${shortDate(campaign.starts_on)} to ${shortDate(campaign.ends_on)} &middot; ${item.submitted_reports || 0} reports</p>
       <p>${escapeHtml(item.field_validation_purpose || 'Collect field validation evidence.')}</p>
       <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="survey_campaign" data-entity-id="${campaign.id}">Details</button>
         <button class="btn btn-sm btn-outline-secondary campaign-action" data-action="reports" data-campaign="${campaign.id}">Reports</button>
         <button class="btn btn-sm btn-outline-secondary campaign-action" data-action="decision" data-campaign="${campaign.id}">Decision</button>
         ${campaignStatusActions(campaign)}
@@ -1179,6 +1309,9 @@ function renderWorkspaces() {
       </div>
       <span class="priority-badge priority-${Number(decision.priority_score) >= 70 ? 'high' : Number(decision.priority_score) >= 45 ? 'medium' : 'watch'}">${Number(decision.priority_score).toFixed(0)}</span>
       <p>${escapeHtml(decision.rationale)} Next: ${escapeHtml(decision.next_action)}</p>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="decision_snapshot" data-entity-id="${decision.id}">Details</button>
+      </div>
     </article>
   `).join('') : '<div class="empty-state">No decision snapshots yet.</div>';
 
@@ -1213,7 +1346,10 @@ function renderWorkspaces() {
   });
 
   document.querySelectorAll('.workspace-organization-card, .workspace-project-card').forEach(card => {
-    const open = () => focusWorkspaceList(card.dataset.search);
+    const open = () => {
+      if (card.classList.contains('workspace-organization-card')) return openEntityDetail('organization', card.dataset.id);
+      return openEntityDetail('project', card.dataset.id);
+    };
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1226,7 +1362,7 @@ function renderWorkspaces() {
   });
 
   document.querySelectorAll('.workspace-site-card').forEach(card => {
-    const open = () => openSiteFollowUp(card.dataset.site);
+    const open = () => openEntityDetail('site_profile', card.dataset.site);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1239,7 +1375,7 @@ function renderWorkspaces() {
   });
 
   document.querySelectorAll('.workspace-campaign-card').forEach(card => {
-    const open = () => openCampaignFollowUp(card.dataset.campaign);
+    const open = () => openEntityDetail('survey_campaign', card.dataset.campaign);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1252,10 +1388,7 @@ function renderWorkspaces() {
   });
 
   document.querySelectorAll('.workspace-decision-card').forEach(card => {
-    const open = () => {
-      const decision = decisionSnapshots.find(item => item.id === Number(card.dataset.decision));
-      openDecisionFollowUp(decision);
-    };
+    const open = () => openEntityDetail('decision_snapshot', card.dataset.decision);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1787,6 +1920,7 @@ function renderAssets() {
         </div>
         <div class="ticket-actions">
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="profile" data-id="${asset.id}"><i data-lucide="map-pin"></i> Area</button>
+          <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="infrastructure_asset" data-entity-id="${asset.id}"><i data-lucide="file-search"></i> Details</button>
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}"><i data-lucide="activity"></i> Telemetry</button>
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="report" data-id="${asset.id}"><i data-lucide="clipboard-check"></i> Report</button>
           <button class="btn btn-sm btn-outline-secondary asset-action" data-action="alert" data-id="${asset.id}"><i data-lucide="triangle-alert"></i> Alert</button>
@@ -1806,11 +1940,9 @@ function renderAssets() {
       if (asset) prepareAssetAction(button.dataset.action, asset);
     });
   });
+  wireEntityDetailButtons();
   document.querySelectorAll('.asset-card').forEach(card => {
-    const open = () => {
-      const asset = assets.find(item => item.id === Number(card.dataset.id));
-      if (asset) prepareAssetAction('profile', asset);
-    };
+    const open = () => openEntityDetail('infrastructure_asset', card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1854,18 +1986,19 @@ function renderSignalProbeHealth() {
 
 function renderReports() {
   document.getElementById('reports-list').innerHTML = reports.map(report => `
-    <article class="list-card clickable-card report-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(report))}">
+    <article class="list-card clickable-card report-card" role="button" tabindex="0" data-id="${report.id}" data-key="${escapeHtml(areaKey(report))}">
       <div><strong>${escapeHtml(report.report_type)}</strong><span>${escapeHtml(report.commune)}, ${escapeHtml(report.department)} &middot; ${escapeHtml(report.submitted_by)}</span></div>
       <span class="status-pill">${escapeHtml(report.status)}</span>
       <p>${escapeHtml(report.notes)}</p>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="field_report" data-entity-id="${report.id}">Details</button>
+      </div>
     </article>
   `).join('');
 
+  wireEntityDetailButtons();
   document.querySelectorAll('.report-card').forEach(card => {
-    const open = () => {
-      const area = allStats.find(item => areaKey(item) === card.dataset.key);
-      openAreaFollowUp(area);
-    };
+    const open = () => openEntityDetail('field_report', card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1883,6 +2016,7 @@ function renderAlerts() {
     <article class="list-card clickable-card alert-card severity-${escapeHtml(alert.severity)}" role="button" tabindex="0" data-id="${alert.id}">
       <div><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span></div>
       <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="alert" data-entity-id="${alert.id}">Details</button>
         ${alert.status === 'open' ? `<button class="btn btn-sm btn-outline-secondary alert-status-action" data-id="${alert.id}" data-status="acknowledged">Acknowledge</button>` : ''}
         <button class="btn btn-sm btn-outline-secondary alert-ticket-action" data-id="${alert.id}">Ticket</button>
         ${alert.status !== 'resolved' ? `<button class="btn btn-sm btn-outline-secondary alert-status-action" data-id="${alert.id}" data-status="resolved">Resolve</button>` : ''}
@@ -1906,9 +2040,10 @@ function renderAlerts() {
       document.getElementById('ticketTitle').focus();
     });
   });
+  wireEntityDetailButtons();
 
   document.querySelectorAll('.alert-card').forEach(card => {
-    const open = () => openAlertFollowUp(card.dataset.id);
+    const open = () => openEntityDetail('alert', card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -2059,6 +2194,7 @@ function renderTickets() {
         <span>Ticket #${ticket.id} &middot; ${escapeHtml(ticket.status)} &middot; ${escapeHtml(ticket.assigned_to || 'Unassigned')}</span>
       </div>
       <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="maintenance_ticket" data-entity-id="${ticket.id}">Details</button>
         ${ticketStatusActions(ticket)}
       </div>
       <p>Priority ${escapeHtml(ticket.priority)} &middot; Asset ${escapeHtml(ticket.asset_id || 'n/a')} &middot; Alert ${escapeHtml(ticket.alert_id || 'n/a')} &middot; Due ${escapeHtml(ticket.due_date || 'not set')}</p>
@@ -2082,8 +2218,9 @@ function renderTickets() {
       await refreshOverviewLayer();
     });
   });
+  wireEntityDetailButtons();
   document.querySelectorAll('.ticket-card').forEach(card => {
-    const open = () => openTicketFollowUp(card.dataset.id);
+    const open = () => openEntityDetail('maintenance_ticket', card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -2199,17 +2336,33 @@ function renderImeiCompliance() {
     <div class="metric-tile accent-red"><span>Blocked/unknown</span><strong>${imeiCompliance.blocked_events + imeiCompliance.unknown_events}</strong><small>${(imeiCompliance.operators || []).join(', ') || 'No operator feed yet'}</small></div>
   `;
   listTarget.innerHTML = imeiCompliance.latest_events?.length ? imeiCompliance.latest_events.map(event => `
-    <article class="list-card priority-${event.compliance_status === 'blocked' ? 'urgent' : event.compliance_status === 'pending' ? 'medium' : 'watch'}">
+    <article class="list-card clickable-card imei-event-card priority-${event.compliance_status === 'blocked' ? 'urgent' : event.compliance_status === 'pending' ? 'medium' : 'watch'}" role="button" tabindex="0" data-id="${event.id}">
       <div>
         <strong>${escapeHtml(event.operator_name)} &middot; ${escapeHtml(event.event_type)}</strong>
         <span>IMEI *${escapeHtml(event.imei_last4 || 'hash')} &middot; ${escapeHtml(event.region || 'Cameroon')}${event.commune ? ` / ${escapeHtml(event.commune)}` : ''}</span>
       </div>
       <span class="status-pill">${escapeHtml(event.compliance_status)}</span>
       <p>${escapeHtml(event.source_system)} &middot; ${escapeHtml(event.raw_reference || 'no reference')} &middot; ${escapeHtml(event.created_at)}</p>
+      <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="operator_imei_event" data-entity-id="${event.id}">Details</button>
+      </div>
     </article>
   `).join('') : `
     <div class="empty-state">${escapeHtml(imeiCompliance.regulatory_note)}</div>
   `;
+  wireEntityDetailButtons();
+  document.querySelectorAll('.imei-event-card').forEach(card => {
+    const open = () => openEntityDetail('operator_imei_event', card.dataset.id);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function renderDecision(report) {
@@ -2325,11 +2478,9 @@ function renderDecisionBoard() {
       await refreshOverviewLayer();
     });
   });
+  wireEntityDetailButtons();
   document.querySelectorAll('.decision-card-link').forEach(card => {
-    const open = () => {
-      const decision = decisionBoard.decisions.find(item => item.id === Number(card.dataset.id));
-      openDecisionFollowUp(decision);
-    };
+    const open = () => openEntityDetail('decision_snapshot', card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -2362,6 +2513,7 @@ function renderDecisionCard(decision) {
         <div><span>Owner</span><strong>${escapeHtml(decision.owner_name || 'Unset')}</strong></div>
       </div>
       <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="decision_snapshot" data-entity-id="${decision.id}"><i data-lucide="file-search"></i> Details</button>
         ${decisionStageActions(decision)}
       </div>
     </article>
@@ -2435,11 +2587,9 @@ function renderExecutionBoard() {
       renderExecutionBoard();
     });
   });
+  wireEntityDetailButtons();
   document.querySelectorAll('.execution-plan-card-link').forEach(card => {
-    const open = () => {
-      const plan = executionBoard.plans.find(item => item.id === Number(card.dataset.id));
-      openDecisionFollowUp(plan);
-    };
+    const open = () => openEntityDetail('execution_plan', card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -2482,6 +2632,7 @@ function renderExecutionPlanCard(plan) {
         <div><span>Dates</span><strong>${escapeHtml(plan.planned_start || 'TBD')}</strong></div>
       </div>
       <div class="ticket-actions">
+        <button class="btn btn-sm btn-outline-secondary" data-entity-detail data-entity-type="execution_plan" data-entity-id="${plan.id}"><i data-lucide="file-search"></i> Details</button>
         ${executionPlanStatusActions(plan)}
       </div>
     </article>
@@ -3261,6 +3412,57 @@ document.getElementById('login-form')?.addEventListener('submit', async event =>
     switchView('workspaces');
   } catch (error) {
     setStatus(document.getElementById('login-status'), error.message, 'danger');
+  }
+});
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+    reader.onerror = () => reject(new Error('Could not read evidence file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+document.getElementById('entity-detail-close')?.addEventListener('click', closeEntityDetail);
+document.getElementById('entity-detail-panel')?.addEventListener('click', event => {
+  if (event.target.id === 'entity-detail-panel') closeEntityDetail();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeEntityDetail();
+});
+
+document.getElementById('entity-evidence-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const fileInput = document.getElementById('entityEvidenceFile');
+  const status = document.getElementById('entity-evidence-status');
+  const file = fileInput?.files?.[0];
+  if (!file) {
+    setStatus(status, 'Choose an evidence file first.', 'danger');
+    return;
+  }
+  try {
+    setStatus(status, 'Uploading evidence...', 'info');
+    await fetchJson('/api/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entity_type: form.dataset.entityType,
+        entity_id: Number(form.dataset.entityId),
+        file_name: file.name,
+        content_type: file.type || 'application/octet-stream',
+        content_base64: await readFileAsBase64(file),
+        latitude: document.getElementById('entityEvidenceLatitude').value ? Number(document.getElementById('entityEvidenceLatitude').value) : null,
+        longitude: document.getElementById('entityEvidenceLongitude').value ? Number(document.getElementById('entityEvidenceLongitude').value) : null,
+        captured_at: null,
+      }),
+    });
+    form.reset();
+    setStatus(status, 'Evidence attached.', 'success');
+    await openEntityDetail(form.dataset.entityType, form.dataset.entityId);
+  } catch (error) {
+    setStatus(status, error.message, 'danger');
   }
 });
 

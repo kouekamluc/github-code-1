@@ -19,20 +19,20 @@ Run the same check with:
 | Public cockpit | Working | Summary, overview KPIs, risks, next actions | Add configurable tenant/client views |
 | Phone matrix | Working | Matrix, assumptions, area detail, recalculation endpoint | Add source versioning and admin review for manual overrides |
 | Workspace management | Working | Organization, project, dashboard, readiness cards | Add tenant isolation and workspace-level permissions |
-| Site profiles | Working | Site creation linked to project and area dossier | Add duplicate review and map-assisted site placement |
+| Site profiles | Working | Site creation/edit linked to project, detail drawer, area dossier | Add duplicate review and map-assisted site placement |
 | Survey campaigns | Working core | Campaign create and status transition | Implement form builder, offline submissions, photos, and field-agent assignments |
-| Signal probes/assets | Working core | Asset create, linked site/project, status workflow | Add device registry keys, heartbeat rules, and asset detail pages |
-| Field reports | Working core | Report create linked to campaign/site/asset | Add file/photo upload and evidence review workflow |
-| Alerts | Working core | Alert create, acknowledge, ticket link | Add automatic rules from telemetry thresholds and missed heartbeats |
-| Maintenance tickets | Working core | Ticket create, start, complete, linked alert resolution | Add technician calendar, SLA escalation, completion evidence |
+| Signal probes/assets | Working core | Asset create/edit, linked site/project, detail drawer, evidence upload, status workflow | Add device registry keys, heartbeat rules, and heartbeat alerting |
+| Field reports | Working core | Report create/edit linked to campaign/site/asset, detail drawer | Add report-specific review queues and required evidence policies |
+| Alerts | Working core | Alert create, detail drawer, acknowledge, ticket link | Add automatic rules from telemetry thresholds and missed heartbeats |
+| Maintenance tickets | Working core | Ticket create, detail drawer, start, complete, linked alert resolution | Add technician calendar, SLA escalation, completion evidence |
 | Telemetry | Working core | Reading create linked to asset/site/project | Add ingestion tokens, batch ingest, and anomaly detection |
-| Operator IMEI API | Working intake | Event ingest, hash/last-four storage, compliance summary | Add per-ISP connectors, webhook signatures, batch upload, rate limits, and legal retention rules |
-| Decision board | Working core | Linked decision create, approval validation | Add richer approval notes, attachments, and decision history view |
-| Execution board | Working core | Plan creation from approved decision, status transition | Add execution checklist editing and outcome evidence |
-| Area dossier | Working | Area dossier joins sites, assets, campaigns, reports, alerts, tickets, readings | Add printable dossier and related-record deep links |
+| Operator IMEI API | Working intake | Event ingest, hash/last-four storage, compliance summary, detail drawer | Add per-ISP connectors, webhook signatures, batch upload, rate limits, and legal retention rules |
+| Decision board | Working core | Linked decision create, detail drawer, approval validation | Add richer approval notes, editable approvals, and decision history filters |
+| Execution board | Working core | Plan creation from approved decision, detail drawer, status transition | Add execution checklist editing and outcome evidence requirements |
+| Area dossier | Working | Area dossier joins sites, assets, campaigns, reports, alerts, tickets, readings, and record detail links | Add printable dossier |
 | HTMX fragments | Working | Ops status and workspace activity auto-refresh | Expand fragments to ticket queue, alert queue, and execution board |
 | Auth/RBAC | Working core | Login, session context, permission checks | Add user management UI, password reset, org membership, session revocation |
-| Audit logs | Working core | Workflow audit events readable by admin | Add audit viewer UI and export filters |
+| Audit logs | Working core | Workflow and metadata/evidence audit events readable by admin and shown in detail drawers | Add standalone audit viewer export filters |
 | CSV exports | Working | Assets, tickets, priority zones, phone matrix | Add reports, campaigns, sites, decisions, IMEI compliance exports |
 
 ## Implementation Plan

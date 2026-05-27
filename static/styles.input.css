@@ -1044,6 +1044,75 @@
     @apply flex flex-wrap justify-end gap-2;
   }
 
+  .entity-detail-panel {
+    @apply fixed inset-0 z-50 hidden;
+    background: rgba(15, 23, 42, 0.42);
+  }
+
+  .entity-detail-panel.is-open {
+    @apply block;
+  }
+
+  .entity-detail-shell {
+    @apply ml-auto flex h-full w-full max-w-3xl flex-col gap-4 overflow-y-auto border-l p-5 shadow-2xl;
+    background: #ffffff;
+    border-color: var(--line-soft);
+  }
+
+  .entity-detail-header,
+  .entity-detail-section {
+    @apply rounded-lg border p-4;
+    background: #f8fafc;
+    border-color: var(--line-soft);
+  }
+
+  .entity-detail-header {
+    @apply flex items-start justify-between gap-3;
+  }
+
+  .entity-detail-header h2 {
+    @apply m-0 text-xl font-black leading-tight;
+  }
+
+  .entity-detail-body {
+    @apply rounded-lg border p-4;
+    background: #ffffff;
+    border-color: var(--line-soft);
+  }
+
+  .entity-field-grid {
+    @apply grid gap-3;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+
+  .entity-field-grid div,
+  .evidence-item,
+  .audit-item {
+    @apply rounded-lg border p-3;
+    background: #ffffff;
+    border-color: var(--line-soft);
+  }
+
+  .entity-field-grid span,
+  .evidence-item span,
+  .evidence-item small,
+  .audit-item span,
+  .audit-item p {
+    @apply text-xs leading-5;
+    color: var(--muted);
+  }
+
+  .entity-field-grid strong,
+  .evidence-item strong,
+  .audit-item strong {
+    @apply block text-sm font-black leading-6;
+    color: var(--ink);
+  }
+
+  .evidence-upload-form {
+    @apply mb-4 grid gap-2;
+  }
+
   .section-divider {
     @apply my-5 border-t;
     border-color: var(--line-soft);

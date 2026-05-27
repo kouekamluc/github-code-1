@@ -1,4 +1,9 @@
+use std::path::{Path, PathBuf};
+
 use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, Responder};
+use base64::Engine;
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 
 use crate::models::*;
@@ -55,6 +60,68 @@ fn escape_html(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#039;")
+}
+
+fn normalize_entity_type(value: &str) -> Option<&'static str> {
+    match value {
+        "organization" | "organizations" => Some("organization"),
+        "project" | "projects" => Some("project"),
+        "site" | "site_profile" | "site_profiles" => Some("site_profile"),
+        "campaign" | "survey_campaign" | "survey_campaigns" => Some("survey_campaign"),
+        "asset" | "infrastructure_asset" | "infrastructure_assets" => Some("infrastructure_asset"),
+        "report" | "field_report" | "field_reports" => Some("field_report"),
+        "alert" | "alerts" => Some("alert"),
+        "ticket" | "maintenance_ticket" | "maintenance_tickets" => Some("maintenance_ticket"),
+        "decision" | "decision_snapshot" | "decision_snapshots" => Some("decision_snapshot"),
+        "execution" | "execution_plan" | "execution_plans" => Some("execution_plan"),
+        "imei" | "operator_imei_event" | "operator_imei_events" => Some("operator_imei_event"),
+        _ => None,
+    }
+}
+
+fn safe_file_name(value: &str) -> String {
+    let cleaned = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    cleaned
+        .trim_matches('_')
+        .chars()
+        .take(120)
+        .collect::<String>()
+}
+
+async fn record_exists(
+    pool: &PgPool,
+    entity_type: &str,
+    entity_id: i64,
+) -> Result<bool, sqlx::Error> {
+    let table = match entity_type {
+        "organization" => "organizations",
+        "project" => "projects",
+        "site_profile" => "site_profiles",
+        "survey_campaign" => "survey_campaigns",
+        "infrastructure_asset" => "infrastructure_assets",
+        "field_report" => "field_reports",
+        "alert" => "alerts",
+        "maintenance_ticket" => "maintenance_tickets",
+        "decision_snapshot" => "decision_snapshots",
+        "execution_plan" => "execution_plans",
+        "operator_imei_event" => "operator_imei_events",
+        _ => return Ok(false),
+    };
+    let query = format!("SELECT EXISTS (SELECT 1 FROM {} WHERE id = $1)", table);
+    sqlx::query_as::<_, (bool,)>(&query)
+        .bind(entity_id)
+        .fetch_one(pool)
+        .await
+        .map(|row| row.0)
 }
 
 async fn area_from_request(
@@ -463,6 +530,274 @@ pub(crate) async fn list_audit_events(
         Ok(events) => HttpResponse::Ok().json(events),
         Err(err) => {
             eprintln!("Failed to query audit events: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/entities/{entity_type}/{id}")]
+pub(crate) async fn entity_detail(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(String, i64)>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "audit:read").await {
+        return response;
+    }
+    let (raw_entity_type, entity_id) = path.into_inner();
+    let Some(entity_type) = normalize_entity_type(&raw_entity_type) else {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Unsupported detail entity type.".into(),
+        });
+    };
+
+    let record = match entity_type {
+        "organization" => fetch_organizations(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "project" => fetch_projects(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "site_profile" => fetch_site_profiles(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "survey_campaign" => fetch_survey_campaigns(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "infrastructure_asset" => fetch_assets(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "field_report" => fetch_reports(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "alert" => fetch_alerts(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "maintenance_ticket" => fetch_tickets(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "decision_snapshot" => fetch_decision_snapshots(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "execution_plan" => fetch_execution_plans(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        "operator_imei_event" => fetch_imei_events(pool.get_ref())
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|row| row.id == entity_id))
+            .and_then(|record| serde_json::to_value(record).ok()),
+        _ => None,
+    };
+    let Some(record) = record else {
+        return HttpResponse::NotFound().json(ApiError {
+            message: "Record not found.".into(),
+        });
+    };
+
+    let evidence = match fetch_evidence_files(pool.get_ref(), entity_type, entity_id).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to fetch evidence files: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let audit_events = match fetch_audit_events(
+        pool.get_ref(),
+        &AuditEventQuery {
+            entity_type: Some(entity_type.into()),
+            entity_id: Some(entity_id),
+            limit: Some(50),
+        },
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to fetch entity audit events: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    HttpResponse::Ok().json(EntityDetail {
+        entity_type: entity_type.into(),
+        entity_id,
+        record,
+        evidence,
+        audit_events,
+    })
+}
+
+#[get("/api/evidence")]
+pub(crate) async fn list_evidence(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    query: web::Query<EvidenceQuery>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "audit:read").await {
+        return response;
+    }
+    let Some(entity_type) = normalize_entity_type(&query.entity_type) else {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Unsupported evidence entity type.".into(),
+        });
+    };
+    match fetch_evidence_files(pool.get_ref(), entity_type, query.entity_id).await {
+        Ok(files) => HttpResponse::Ok().json(files),
+        Err(err) => {
+            eprintln!("Failed to query evidence files: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/evidence")]
+pub(crate) async fn upload_evidence(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    payload: web::Json<EvidenceUploadRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "field:submit").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let Some(entity_type) = normalize_entity_type(&payload.entity_type) else {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Unsupported evidence entity type.".into(),
+        });
+    };
+    match record_exists(pool.get_ref(), entity_type, payload.entity_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Cannot attach evidence to a missing record.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to verify evidence entity: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+    let bytes =
+        match base64::engine::general_purpose::STANDARD.decode(payload.content_base64.trim()) {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            Ok(_) => {
+                return HttpResponse::BadRequest().json(ApiError {
+                    message: "Evidence file content is empty.".into(),
+                })
+            }
+            Err(_) => {
+                return HttpResponse::BadRequest().json(ApiError {
+                    message: "Evidence file must be valid base64.".into(),
+                })
+            }
+        };
+    if bytes.len() > 8 * 1024 * 1024 {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Evidence file cannot exceed 8 MB in this upload path.".into(),
+        });
+    }
+    if let (Some(latitude), Some(longitude)) = (payload.latitude, payload.longitude) {
+        if let Err(message) = validate_gps(latitude, longitude) {
+            return HttpResponse::BadRequest().json(ApiError { message });
+        }
+    }
+
+    let digest = Sha256::digest(&bytes);
+    let hash = hex::encode(digest);
+    let safe_name = safe_file_name(&payload.file_name);
+    if safe_name.is_empty() {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Evidence file name is required.".into(),
+        });
+    }
+    let storage_dir: PathBuf = ["evidence_uploads", entity_type].iter().collect();
+    if let Err(err) = std::fs::create_dir_all(&storage_dir) {
+        eprintln!("Failed to create evidence storage dir: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    let storage_path = storage_dir.join(format!(
+        "{}-{}-{}",
+        payload.entity_id,
+        &hash[..16],
+        safe_name
+    ));
+    if let Err(err) = std::fs::write(&storage_path, &bytes) {
+        eprintln!("Failed to write evidence file: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    let storage_path_string = Path::new(&storage_path).to_string_lossy().to_string();
+
+    let insert = sqlx::query_as::<_, (i64,)>(
+        r#"
+        INSERT INTO evidence_files (
+            entity_type, entity_id, file_name, content_type, storage_path,
+            sha256_hash, file_size, latitude, longitude, captured_at, uploaded_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::TIMESTAMPTZ, $11)
+        RETURNING id
+        "#,
+    )
+    .bind(entity_type)
+    .bind(payload.entity_id)
+    .bind(&payload.file_name)
+    .bind(&payload.content_type)
+    .bind(&storage_path_string)
+    .bind(&hash)
+    .bind(bytes.len() as i64)
+    .bind(payload.latitude)
+    .bind(payload.longitude)
+    .bind(&payload.captured_at)
+    .bind(&context.actor)
+    .fetch_one(pool.get_ref())
+    .await;
+
+    let evidence_id = match insert {
+        Ok(row) => row.0,
+        Err(err) => {
+            eprintln!("Failed to store evidence metadata: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    if let Err(err) = record_custom_audit_event(
+        pool.get_ref(),
+        entity_type,
+        payload.entity_id,
+        "evidence",
+        None,
+        Some(&payload.file_name),
+        &context.actor,
+        Some("Evidence uploaded."),
+    )
+    .await
+    {
+        eprintln!("Failed to audit evidence upload: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+
+    match fetch_evidence_files(pool.get_ref(), entity_type, payload.entity_id).await {
+        Ok(files) => HttpResponse::Ok().json(json!({ "evidence_id": evidence_id, "files": files })),
+        Err(err) => {
+            eprintln!("Failed to return evidence files after upload: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }
@@ -1015,6 +1350,99 @@ pub(crate) async fn create_site_profile(
         },
         Err(err) => {
             eprintln!("Failed to create site profile: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[patch("/api/site-profiles/{id}")]
+pub(crate) async fn update_site_profile(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<i64>,
+    payload: web::Json<SiteProfileRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "data:write").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    for (value, label) in [
+        (&payload.name, "Site name"),
+        (&payload.site_type, "Site type"),
+        (&payload.region, "Region"),
+        (&payload.department, "Department"),
+        (&payload.commune, "Arrondissement"),
+    ] {
+        if let Err(message) = validate_required(value, label) {
+            return HttpResponse::BadRequest().json(ApiError { message });
+        }
+    }
+    if let Err(message) = validate_gps(payload.latitude, payload.longitude) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    let id = *path;
+    let result = sqlx::query(
+        r#"
+        UPDATE site_profiles
+        SET project_id = $1,
+            name = $2,
+            site_type = $3,
+            region = $4,
+            department = $5,
+            commune = $6,
+            latitude = $7,
+            longitude = $8,
+            beneficiary_estimate = $9,
+            trust_signal = COALESCE($10, trust_signal),
+            access_notes = $11
+        WHERE id = $12
+        "#,
+    )
+    .bind(payload.project_id)
+    .bind(&payload.name)
+    .bind(&payload.site_type)
+    .bind(&payload.region)
+    .bind(&payload.department)
+    .bind(&payload.commune)
+    .bind(payload.latitude)
+    .bind(payload.longitude)
+    .bind(payload.beneficiary_estimate)
+    .bind(&payload.trust_signal)
+    .bind(&payload.access_notes)
+    .bind(id)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(done) if done.rows_affected() == 0 => HttpResponse::NotFound().json(ApiError {
+            message: "Site profile not found.".into(),
+        }),
+        Ok(_) => {
+            if let Err(err) = record_custom_audit_event(
+                pool.get_ref(),
+                "site_profile",
+                id,
+                "metadata",
+                None,
+                Some("updated"),
+                &context.actor,
+                Some("Site profile edited."),
+            )
+            .await
+            {
+                eprintln!("Failed to audit site edit: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+            match fetch_site_profiles(pool.get_ref()).await {
+                Ok(sites) => HttpResponse::Ok().json(sites),
+                Err(err) => {
+                    eprintln!("Failed to return site profiles after update: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Failed to update site profile: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }
@@ -1823,6 +2251,93 @@ pub(crate) async fn create_asset(
     }
 }
 
+#[patch("/api/assets/{id}")]
+pub(crate) async fn update_asset(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<i64>,
+    payload: web::Json<AssetRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "data:write").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    if let Err(message) = validate_gps(payload.latitude, payload.longitude) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    let id = *path;
+    let result = sqlx::query(
+        r#"
+        UPDATE infrastructure_assets
+        SET project_id = $1,
+            site_profile_id = $2,
+            asset_type = $3,
+            name = $4,
+            region = $5,
+            department = $6,
+            commune = $7,
+            latitude = $8,
+            longitude = $9,
+            status = $10,
+            operator = $11,
+            installed_at = $12::DATE,
+            notes = $13,
+            last_checked_at = NOW()
+        WHERE id = $14
+        "#,
+    )
+    .bind(payload.project_id)
+    .bind(payload.site_profile_id)
+    .bind(&payload.asset_type)
+    .bind(&payload.name)
+    .bind(&payload.region)
+    .bind(&payload.department)
+    .bind(&payload.commune)
+    .bind(payload.latitude)
+    .bind(payload.longitude)
+    .bind(&payload.status)
+    .bind(&payload.operator)
+    .bind(&payload.installed_at)
+    .bind(&payload.notes)
+    .bind(id)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(done) if done.rows_affected() == 0 => HttpResponse::NotFound().json(ApiError {
+            message: "Asset not found.".into(),
+        }),
+        Ok(_) => {
+            if let Err(err) = record_custom_audit_event(
+                pool.get_ref(),
+                "infrastructure_asset",
+                id,
+                "metadata",
+                None,
+                Some("updated"),
+                &context.actor,
+                Some("Asset edited."),
+            )
+            .await
+            {
+                eprintln!("Failed to audit asset edit: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+            match fetch_assets(pool.get_ref()).await {
+                Ok(assets) => HttpResponse::Ok().json(assets),
+                Err(err) => {
+                    eprintln!("Failed to return assets after update: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Failed to update asset: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 #[patch("/api/assets/{id}/status")]
 pub(crate) async fn update_asset_status(
     request: HttpRequest,
@@ -1968,6 +2483,94 @@ pub(crate) async fn create_report(
         },
         Err(err) => {
             eprintln!("Failed to create report: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[patch("/api/reports/{id}")]
+pub(crate) async fn update_report(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<i64>,
+    payload: web::Json<FieldReportRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "field:submit").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    if let Err(message) = validate_gps(payload.latitude, payload.longitude) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    let id = *path;
+    let result = sqlx::query(
+        r#"
+        UPDATE field_reports
+        SET project_id = $1,
+            site_profile_id = $2,
+            campaign_id = $3,
+            asset_id = $4,
+            report_type = $5,
+            region = $6,
+            department = $7,
+            commune = $8,
+            latitude = $9,
+            longitude = $10,
+            status = $11,
+            evidence_quality = COALESCE($12, evidence_quality),
+            notes = $13,
+            submitted_by = $14
+        WHERE id = $15
+        "#,
+    )
+    .bind(payload.project_id)
+    .bind(payload.site_profile_id)
+    .bind(payload.campaign_id)
+    .bind(payload.asset_id)
+    .bind(&payload.report_type)
+    .bind(&payload.region)
+    .bind(&payload.department)
+    .bind(&payload.commune)
+    .bind(payload.latitude)
+    .bind(payload.longitude)
+    .bind(&payload.status)
+    .bind(&payload.evidence_quality)
+    .bind(&payload.notes)
+    .bind(&payload.submitted_by)
+    .bind(id)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(done) if done.rows_affected() == 0 => HttpResponse::NotFound().json(ApiError {
+            message: "Report not found.".into(),
+        }),
+        Ok(_) => {
+            if let Err(err) = record_custom_audit_event(
+                pool.get_ref(),
+                "field_report",
+                id,
+                "metadata",
+                None,
+                Some("updated"),
+                &context.actor,
+                Some("Field report edited."),
+            )
+            .await
+            {
+                eprintln!("Failed to audit report edit: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+            match fetch_reports(pool.get_ref()).await {
+                Ok(reports) => HttpResponse::Ok().json(reports),
+                Err(err) => {
+                    eprintln!("Failed to return reports after update: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Failed to update report: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }

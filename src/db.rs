@@ -305,6 +305,23 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        CREATE TABLE IF NOT EXISTS evidence_files (
+            id BIGSERIAL PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id BIGINT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            sha256_hash TEXT NOT NULL,
+            file_size BIGINT NOT NULL,
+            latitude DOUBLE PRECISION,
+            longitude DOUBLE PRECISION,
+            captured_at TIMESTAMPTZ,
+            uploaded_by TEXT NOT NULL DEFAULT 'system',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+        r#"
         CREATE TABLE IF NOT EXISTS auth_sessions (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -370,6 +387,14 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         ADD COLUMN IF NOT EXISTS password_hash TEXT,
         ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE
         "#,
+        r#"
+        ALTER TABLE evidence_files
+        ADD COLUMN IF NOT EXISTS file_size BIGINT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS uploaded_by TEXT NOT NULL DEFAULT 'system'
+        "#,
     ];
 
     for statement in compatibility_schema {
@@ -381,6 +406,15 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique_idx
         ON users(username)
         WHERE username IS NOT NULL
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS evidence_files_entity_idx
+        ON evidence_files(entity_type, entity_id, created_at DESC)
         "#,
     )
     .execute(pool)

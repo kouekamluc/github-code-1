@@ -927,6 +927,46 @@
     </main>
   </div>
 
+  <aside id="entity-detail-panel" class="entity-detail-panel" aria-hidden="true">
+    <div class="entity-detail-shell" role="dialog" aria-modal="true" aria-labelledby="entity-detail-title">
+      <div class="entity-detail-header">
+        <div>
+          <p class="eyebrow" id="entity-detail-subtitle">Record detail</p>
+          <h2 id="entity-detail-title">Select a record</h2>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" id="entity-detail-close" type="button" aria-label="Close detail"><i data-lucide="x"></i></button>
+      </div>
+      <div id="entity-detail-body" class="entity-detail-body"></div>
+      <div class="entity-detail-section">
+        <div class="surface-header">
+          <div>
+            <p class="eyebrow">Evidence</p>
+            <h2>GPS/photo proof and files</h2>
+          </div>
+        </div>
+        <form id="entity-evidence-form" class="evidence-upload-form">
+          <input class="form-control" id="entityEvidenceFile" type="file" required />
+          <div class="row g-2">
+            <div class="col"><input type="number" step="0.0001" class="form-control" id="entityEvidenceLatitude" placeholder="Latitude" /></div>
+            <div class="col"><input type="number" step="0.0001" class="form-control" id="entityEvidenceLongitude" placeholder="Longitude" /></div>
+          </div>
+          <button class="btn btn-primary w-100" type="submit"><i data-lucide="upload"></i> Attach evidence</button>
+          <div id="entity-evidence-status"></div>
+        </form>
+        <div id="entity-evidence-list" class="list-stack"></div>
+      </div>
+      <div class="entity-detail-section">
+        <div class="surface-header">
+          <div>
+            <p class="eyebrow">Audit trail</p>
+            <h2>Backend changes</h2>
+          </div>
+        </div>
+        <div id="entity-audit-list" class="list-stack"></div>
+      </div>
+    </div>
+  </aside>
+
   <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
   <script src="htmx.min.js"></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>

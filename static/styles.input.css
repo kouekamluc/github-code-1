@@ -738,6 +738,15 @@
     box-shadow: var(--shadow-md);
   }
 
+  .clickable-card {
+    cursor: pointer;
+  }
+
+  .clickable-card:focus-visible {
+    outline: 3px solid rgba(15, 118, 110, 0.25);
+    outline-offset: 2px;
+  }
+
   .list-card strong,
   .list-card span,
   .list-card p,

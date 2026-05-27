@@ -463,6 +463,36 @@ function areaFromOpportunity(opportunity) {
   ));
 }
 
+function areaFromZone(zone) {
+  return allStats.find(area => (
+    area.region === zone.region
+    && area.department === zone.department
+    && area.commune === zone.commune
+  ));
+}
+
+function areaFromAction(action) {
+  const titleMatch = action.title?.match(/^Turn (.+) into /);
+  if (titleMatch) {
+    const commune = titleMatch[1];
+    return allStats.find(area => (
+      area.commune === commune
+      && (!action.area || action.area.includes(area.department))
+      && (!action.area || action.area.includes(area.region))
+    ));
+  }
+  return null;
+}
+
+function openAreaFollowUp(area, view = 'profile') {
+  if (!area) return;
+  selectArea(area, view);
+}
+
+function cardClickGuard(event) {
+  return Boolean(event.target.closest('button, a, input, select, textarea'));
+}
+
 function renderOverviewIntelligence() {
   const opportunityTarget = document.getElementById('overview-opportunities');
   const actionTarget = document.getElementById('overview-actions');
@@ -490,8 +520,8 @@ function renderOverviewIntelligence() {
     </article>
   `).join('') : '<div class="empty-state">No overview opportunities are available yet.</div>';
 
-  actionTarget.innerHTML = overviewIntelligence.action_queue?.length ? overviewIntelligence.action_queue.map(action => `
-    <article class="compact-card priority-${escapeHtml(action.urgency === 'urgent' ? 'high' : action.urgency)}">
+  actionTarget.innerHTML = overviewIntelligence.action_queue?.length ? overviewIntelligence.action_queue.map((action, index) => `
+    <article class="compact-card clickable-card overview-next-action priority-${escapeHtml(action.urgency === 'urgent' ? 'high' : action.urgency)}" role="button" tabindex="0" data-index="${index}">
       <div>
         <strong>${escapeHtml(action.title)}</strong>
         <span>${escapeHtml(action.action_type)}${action.area ? ` &middot; ${escapeHtml(action.area)}` : ''}</span>
@@ -501,8 +531,8 @@ function renderOverviewIntelligence() {
     </article>
   `).join('') : '<div class="empty-state">No immediate action queue.</div>';
 
-  riskTarget.innerHTML = overviewIntelligence.trust_risks?.map(risk => `
-    <article class="risk-card severity-${escapeHtml(risk.severity)}">
+  riskTarget.innerHTML = overviewIntelligence.trust_risks?.map((risk, index) => `
+    <article class="risk-card clickable-card overview-risk-action severity-${escapeHtml(risk.severity)}" role="button" tabindex="0" data-index="${index}">
       <span>${escapeHtml(risk.label)}</span>
       <strong>${escapeHtml(risk.value)}</strong>
       <p>${escapeHtml(risk.mitigation)}</p>
@@ -527,6 +557,53 @@ function renderOverviewIntelligence() {
       const opportunity = overviewIntelligence.top_opportunities[Number(button.dataset.index)];
       const area = opportunity && areaFromOpportunity(opportunity);
       if (area) prepareAreaAction(button.dataset.action, area);
+    });
+  });
+  document.querySelectorAll('.overview-next-action').forEach(card => {
+    const open = () => {
+      const action = overviewIntelligence.action_queue[Number(card.dataset.index)];
+      const area = action && areaFromAction(action);
+      if (area) {
+        openAreaFollowUp(area, action.action_type === 'decision' ? 'decision' : 'profile');
+        return;
+      }
+      if (action?.action_type === 'maintenance') switchView('tickets');
+      else if (action?.action_type === 'campaign' || action?.action_type === 'site') switchView('workspaces');
+      else if (action?.action_type === 'decision') switchView('decision');
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  document.querySelectorAll('.overview-risk-action').forEach(card => {
+    const open = () => {
+      const risk = overviewIntelligence.trust_risks[Number(card.dataset.index)];
+      switchView('areas');
+      if (risk.label.toLowerCase().includes('low-confidence')) {
+        matrixConfidenceFilter.value = 'low';
+      }
+      if (risk.label.toLowerCase().includes('weak phone')) {
+        matrixOwnershipFilter.value = 'under65';
+      }
+      if (risk.label.toLowerCase().includes('open alerts')) {
+        matrixOpportunityFilter.value = 'high';
+      }
+      updateView();
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
     });
   });
   const topDecisionButton = document.getElementById('overview-top-decision');
@@ -1445,12 +1522,28 @@ function renderSignalProbeHealth() {
 
 function renderReports() {
   document.getElementById('reports-list').innerHTML = reports.map(report => `
-    <article class="list-card">
+    <article class="list-card clickable-card report-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(report))}">
       <div><strong>${escapeHtml(report.report_type)}</strong><span>${escapeHtml(report.commune)}, ${escapeHtml(report.department)} &middot; ${escapeHtml(report.submitted_by)}</span></div>
       <span class="status-pill">${escapeHtml(report.status)}</span>
       <p>${escapeHtml(report.notes)}</p>
     </article>
   `).join('');
+
+  document.querySelectorAll('.report-card').forEach(card => {
+    const open = () => {
+      const area = allStats.find(item => areaKey(item) === card.dataset.key);
+      openAreaFollowUp(area);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function renderAlerts() {
@@ -1501,12 +1594,28 @@ function renderAlerts() {
 
 function renderPriority() {
   document.getElementById('priority-list').innerHTML = priorityZones.slice(0, 18).map(zone => `
-    <article class="list-card">
+    <article class="list-card clickable-card priority-zone-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(zone))}">
       <div><strong>${escapeHtml(zone.commune)}</strong><span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)} &middot; ${formatNumber(zone.population)} people</span></div>
       <span class="priority-badge priority-${escapeHtml(zone.priority_label.toLowerCase())}">${escapeHtml(zone.priority_label)} ${zone.priority_score.toFixed(0)}</span>
       <p>${zone.open_alert_count} open alerts &middot; ${zone.asset_count} monitored assets &middot; ${zone.report_count} field reports &middot; ${formatRate(zone.phone_rate)} phone ownership</p>
     </article>
   `).join('');
+
+  document.querySelectorAll('.priority-zone-card').forEach(card => {
+    const open = () => {
+      const area = allStats.find(item => areaKey(item) === card.dataset.key);
+      openAreaFollowUp(area);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 
   renderOverviewPriority();
 }
@@ -1516,7 +1625,7 @@ function renderOverviewAlerts() {
   if (!target) return;
   const openAlerts = alerts.filter(alert => alert.status !== 'resolved').slice(0, 4);
   target.innerHTML = openAlerts.length ? openAlerts.map(alert => `
-    <article class="compact-card severity-${escapeHtml(alert.severity)}">
+    <article class="compact-card clickable-card overview-alert-card severity-${escapeHtml(alert.severity)}" role="button" tabindex="0" data-id="${alert.id}">
       <div>
         <strong>${escapeHtml(alert.title)}</strong>
         <span>${escapeHtml(alert.severity)} validation signal &middot; ${escapeHtml(alert.status)}</span>
@@ -1525,6 +1634,19 @@ function renderOverviewAlerts() {
       <p>${escapeHtml(alert.message)}</p>
     </article>
   `).join('') : '<div class="empty-state">No open alerts.</div>';
+
+  document.querySelectorAll('.overview-alert-card').forEach(card => {
+    const open = () => switchView('alerts');
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function campaignStatusActions(campaign) {
@@ -1622,7 +1744,7 @@ function renderOverviewTickets() {
   if (!target) return;
   const activeTickets = tickets.filter(ticket => ticket.status !== 'done').slice(0, 5);
   target.innerHTML = activeTickets.length ? activeTickets.map(ticket => `
-    <article class="compact-card priority-${escapeHtml(ticket.priority)}">
+    <article class="compact-card clickable-card overview-ticket-card priority-${escapeHtml(ticket.priority)}" role="button" tabindex="0" data-id="${ticket.id}">
       <div>
         <strong>${escapeHtml(ticket.title)}</strong>
         <span>${escapeHtml(ticket.assigned_to || 'Unassigned')} &middot; ${escapeHtml(ticket.status)}</span>
@@ -1631,13 +1753,26 @@ function renderOverviewTickets() {
       <p>Due ${escapeHtml(ticket.due_date || 'not set')} &middot; Asset ${escapeHtml(ticket.asset_id || 'n/a')}</p>
     </article>
   `).join('') : '<div class="empty-state">No active tickets.</div>';
+
+  document.querySelectorAll('.overview-ticket-card').forEach(card => {
+    const open = () => switchView('tickets');
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function renderOverviewPriority() {
   const target = document.getElementById('overview-priority');
   if (!target) return;
   target.innerHTML = priorityZones.slice(0, 5).map(zone => `
-    <article class="compact-card">
+    <article class="compact-card clickable-card overview-priority-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(zone))}">
       <div>
         <strong>${escapeHtml(zone.commune)}</strong>
         <span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)}</span>
@@ -1646,15 +1781,46 @@ function renderOverviewPriority() {
       <p>${formatNumber(zone.population)} people &middot; ${formatRate(zone.phone_rate)} phone ownership &middot; ${Math.round(zone.confidence * 100)}% confidence</p>
     </article>
   `).join('');
+
+  document.querySelectorAll('.overview-priority-card').forEach(card => {
+    const open = () => {
+      const area = allStats.find(item => areaKey(item) === card.dataset.key);
+      openAreaFollowUp(area);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function renderIot() {
   document.getElementById('iot-list').innerHTML = readings.map(reading => `
-    <article class="list-card">
+    <article class="list-card clickable-card telemetry-card" role="button" tabindex="0" data-asset="${reading.asset_id}">
       <div><strong>${escapeHtml(reading.reading_type)}</strong><span>Asset #${reading.asset_id} &middot; ${escapeHtml(reading.created_at)}</span></div>
       <span class="status-pill">${Number(reading.value).toLocaleString()} ${escapeHtml(reading.unit)}</span>
     </article>
   `).join('');
+  document.querySelectorAll('.telemetry-card').forEach(card => {
+    const open = () => {
+      const asset = assets.find(item => item.id === Number(card.dataset.asset));
+      if (asset) prepareAssetAction('profile', asset);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
   renderImeiCompliance();
 }
 
@@ -1701,9 +1867,25 @@ function renderDecision(report) {
     <ul>${report.recommendations.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
     <h3 class="mt-4">Top priority zones</h3>
     <div class="list-stack">
-      ${report.top_priority_zones.map(zone => `<article class="list-card"><strong>${escapeHtml(zone.commune)}</strong><span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)} &middot; Score ${zone.priority_score.toFixed(0)}</span></article>`).join('')}
+      ${report.top_priority_zones.map(zone => `<article class="list-card clickable-card decision-report-zone-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(zone))}"><strong>${escapeHtml(zone.commune)}</strong><span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)} &middot; Score ${zone.priority_score.toFixed(0)}</span></article>`).join('')}
     </div>
   `;
+
+  document.querySelectorAll('.decision-report-zone-card').forEach(card => {
+    const open = () => {
+      const area = allStats.find(item => areaKey(item) === card.dataset.key);
+      openAreaFollowUp(area);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function renderDecisionBoard() {

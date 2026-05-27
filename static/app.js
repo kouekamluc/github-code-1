@@ -544,6 +544,54 @@ async function refreshOverviewLayer() {
   renderOverviewIntelligence();
 }
 
+function actionLabel(action) {
+  return {
+    probe: 'signal probe',
+    campaign: 'survey campaign',
+    report: 'validation report task',
+    site: 'site profile',
+    decision: 'decision snapshot',
+    alert: 'coverage alert',
+    ticket: 'maintenance ticket',
+    full: 'full action bundle',
+  }[action] || action;
+}
+
+async function refreshAfterBackendAction(message, view = null) {
+  await refreshData();
+  if (view) switchView(view);
+  setStatus(dataStatus, message, 'success');
+  if (window.htmx) {
+    htmx.trigger('#data-status', 'refresh');
+    htmx.trigger('#workspace-activity', 'refresh');
+  }
+}
+
+async function runAreaBackendAction(action, area, view = null) {
+  if (!authSession?.token) {
+    switchView('login');
+    setStatus(document.getElementById('login-status'), 'Sign in to create operational records from the console.', 'info');
+    return;
+  }
+  setStatus(dataStatus, `Creating ${actionLabel(action)} for ${area.commune}...`, 'info');
+  try {
+    const result = await fetchJson('/api/actions/area', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action,
+        region: area.region,
+        department: area.department,
+        commune: area.commune,
+      }),
+    });
+    const created = result.created?.length ? ` Ensured: ${result.created.join(', ')}.` : '';
+    await refreshAfterBackendAction(`${result.message}${created}`, view);
+  } catch (error) {
+    setStatus(dataStatus, error.message, 'danger');
+  }
+}
+
 function renderAreaProfile(area = selectedArea) {
   if (!area) {
     areaProfile.innerHTML = '<div class="empty-state">Select an arrondissement from the map or matrix to inspect its intelligence profile.</div>';
@@ -1892,8 +1940,28 @@ function prepareProjectAction(action, project) {
 function applyWorkspaceTemplate(templateId) {
   const template = workspaceTemplates.find(item => item.id === templateId);
   if (!template) return;
+  if (!authSession?.token) {
+    switchView('login');
+    setStatus(document.getElementById('login-status'), 'Sign in to apply workspace templates.', 'info');
+    return;
+  }
   const focusRegion = regionFilter.value !== 'all' ? regionFilter.value : '';
   const focusArea = selectedArea || currentMatrixRows[0] || allStats[0];
+
+  setStatus(dataStatus, `Applying ${template.title}...`, 'info');
+  fetchJson('/api/workspace-templates/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      template_id: templateId,
+      region: focusArea?.region || null,
+      department: focusArea?.department || null,
+      commune: focusArea?.commune || null,
+    }),
+  }).then(async result => {
+    await refreshAfterBackendAction(`${result.message} Ensured: ${(result.created || []).join(', ')}.`, 'workspaces');
+  }).catch(error => setStatus(dataStatus, error.message, 'danger'));
+  return;
 
   document.getElementById('organizationType').value = template.orgType;
   document.getElementById('organizationName').value = `${template.title} client`;
@@ -1938,6 +2006,20 @@ function applyWorkspaceTemplate(templateId) {
 }
 
 function prepareAreaAction(action, area) {
+  if (['probe', 'campaign', 'report', 'site', 'decision', 'alert', 'ticket', 'full'].includes(action)) {
+    const view = {
+      probe: 'assets',
+      campaign: 'workspaces',
+      report: 'reports',
+      site: 'workspaces',
+      decision: 'decision',
+      alert: 'alerts',
+      ticket: 'tickets',
+      full: 'workspaces',
+    }[action];
+    runAreaBackendAction(action, area, view);
+    return;
+  }
   const project = projects.find(item => item.region === area.region) || projects[0];
   if (action === 'probe') {
     switchView('assets');
@@ -2070,12 +2152,29 @@ function prepareAssetAction(action, asset) {
     return;
   }
   if (action === 'ticket') {
-    switchView('tickets');
-    document.getElementById('ticketAssetId').value = asset.id;
-    document.getElementById('ticketTitle').value = `${asset.name} field follow-up`;
-    document.getElementById('ticketPriority').value = asset.status === 'critical' || asset.status === 'offline' ? 'urgent' : 'high';
-    document.getElementById('ticketAssignedTo').value = asset.operator || 'Local technician';
-    document.getElementById('ticketTitle').focus();
+    if (!authSession?.token) {
+      switchView('login');
+      setStatus(document.getElementById('login-status'), 'Sign in to create tickets.', 'info');
+      return;
+    }
+    fetchJson('/api/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: asset.project_id,
+        site_profile_id: asset.site_profile_id,
+        asset_id: asset.id,
+        title: `${asset.name} field follow-up`,
+        priority: asset.status === 'critical' || asset.status === 'offline' ? 'urgent' : 'high',
+        assigned_to: asset.operator || 'Local technician',
+        due_date: null,
+        sla_hours: asset.status === 'critical' || asset.status === 'offline' ? 48 : 120,
+      }),
+    }).then(async data => {
+      tickets = data;
+      signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+      await refreshAfterBackendAction(`Ticket created for ${asset.name}.`, 'tickets');
+    }).catch(error => setStatus(dataStatus, error.message, 'danger'));
   }
 }
 

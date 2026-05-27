@@ -48,6 +48,361 @@ async fn require_permission(
     }
 }
 
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#039;")
+}
+
+async fn area_from_request(
+    pool: &PgPool,
+    region: &str,
+    department: &str,
+    commune: &str,
+) -> Result<Option<LocationStat>, sqlx::Error> {
+    Ok(fetch_location_stats(pool).await?.into_iter().find(|area| {
+        area.region == region && area.department == department && area.commune == commune
+    }))
+}
+
+async fn default_project_for_area(
+    pool: &PgPool,
+    region: &str,
+    requested_project_id: Option<i64>,
+) -> Result<Option<i64>, sqlx::Error> {
+    if requested_project_id.is_some() {
+        return Ok(requested_project_id);
+    }
+
+    sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT id
+        FROM projects
+        ORDER BY
+            CASE WHEN region = $1 THEN 0 ELSE 1 END,
+            created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(region)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.map(|value| value.0))
+}
+
+async fn ensure_area_action(
+    pool: &PgPool,
+    action: &str,
+    area: &LocationStat,
+    project_id: Option<i64>,
+) -> Result<Vec<String>, sqlx::Error> {
+    let mut created = Vec::new();
+    let run_all = action == "full";
+    let project_id = default_project_for_area(pool, &area.region, project_id).await?;
+    let site_name = format!("{} field site", area.commune);
+    let probe_name = format!("{} signal probe", area.commune);
+    let campaign_name = format!("{} phone access validation", area.commune);
+    let decision_title = format!("{} validation decision", area.commune);
+    let ownership_rate = area.phone_rate;
+    let confidence_pct = (area.confidence * 100.0).round() as i64;
+    let budget = 450_000
+        + (((area.population as f64) * 5.5).round() as i64).min(1_900_000)
+        + if area.confidence < 0.68 {
+            380_000
+        } else {
+            180_000
+        };
+    let evidence_score = ((area.confidence * 55.0) + 25.0).clamp(0.0, 100.0);
+
+    if run_all || action == "site" {
+        sqlx::query(
+            r#"
+            INSERT INTO site_profiles (
+                project_id, name, site_type, region, department, commune, latitude,
+                longitude, beneficiary_estimate, trust_signal, access_notes
+            ) VALUES ($1, $2, 'telecom_probe_site', $3, $4, $5, $6, $7, $8, 'gps_photo_verified', $9)
+            ON CONFLICT (name, commune)
+            DO UPDATE SET
+                project_id = COALESCE(EXCLUDED.project_id, site_profiles.project_id),
+                beneficiary_estimate = EXCLUDED.beneficiary_estimate,
+                trust_signal = EXCLUDED.trust_signal,
+                access_notes = EXCLUDED.access_notes
+            "#,
+        )
+        .bind(project_id)
+        .bind(&site_name)
+        .bind(&area.region)
+        .bind(&area.department)
+        .bind(&area.commune)
+        .bind(area.latitude)
+        .bind(area.longitude)
+        .bind(area.population)
+        .bind(format!(
+            "Auto-created operational site for {}. Validate local focal point and GPS/photo proof.",
+            area.commune
+        ))
+        .execute(pool)
+        .await?;
+        created.push("site profile".into());
+    }
+
+    if run_all || action == "campaign" {
+        sqlx::query(
+            r#"
+            INSERT INTO survey_campaigns (
+                project_id, name, form_type, target_region, target_department, target_commune,
+                status, language_mode, offline_enabled, starts_on, ends_on
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'draft', 'bilingual', TRUE, CURRENT_DATE, CURRENT_DATE + INTERVAL '21 days')
+            ON CONFLICT (project_id, name)
+            DO UPDATE SET
+                target_region = EXCLUDED.target_region,
+                target_department = EXCLUDED.target_department,
+                target_commune = EXCLUDED.target_commune,
+                offline_enabled = TRUE,
+                ends_on = EXCLUDED.ends_on
+            "#,
+        )
+        .bind(project_id)
+        .bind(&campaign_name)
+        .bind(if ownership_rate < 65.0 {
+            "phone_ownership_baseline"
+        } else {
+            "gps_photo_survey"
+        })
+        .bind(&area.region)
+        .bind(&area.department)
+        .bind(&area.commune)
+        .execute(pool)
+        .await?;
+        created.push("survey campaign".into());
+    }
+
+    if run_all || action == "probe" {
+        let site_id = sqlx::query_as::<_, (i64,)>(
+            "SELECT id FROM site_profiles WHERE name = $1 AND commune = $2",
+        )
+        .bind(&site_name)
+        .bind(&area.commune)
+        .fetch_optional(pool)
+        .await?
+        .map(|row| row.0);
+        sqlx::query(
+            r#"
+            INSERT INTO infrastructure_assets (
+                project_id, site_profile_id, asset_type, name, region, department, commune,
+                latitude, longitude, status, operator, last_checked_at, notes
+            ) VALUES ($1, $2, 'connectivity_probe', $3, $4, $5, $6, $7, $8, $9, 'Operator/API field team', NOW(), $10)
+            ON CONFLICT (name, commune)
+            DO UPDATE SET
+                project_id = COALESCE(EXCLUDED.project_id, infrastructure_assets.project_id),
+                site_profile_id = COALESCE(EXCLUDED.site_profile_id, infrastructure_assets.site_profile_id),
+                status = EXCLUDED.status,
+                last_checked_at = NOW(),
+                notes = EXCLUDED.notes
+            "#,
+        )
+        .bind(project_id)
+        .bind(site_id)
+        .bind(&probe_name)
+        .bind(&area.region)
+        .bind(&area.department)
+        .bind(&area.commune)
+        .bind(area.latitude)
+        .bind(area.longitude)
+        .bind(if area.confidence < 0.68 { "warning" } else { "online" })
+        .bind(format!(
+            "Auto-created probe from action workflow: {:.1}% phone ownership, {}% confidence.",
+            ownership_rate, confidence_pct
+        ))
+        .execute(pool)
+        .await?;
+        created.push("signal probe".into());
+    }
+
+    let asset_id = sqlx::query_as::<_, (i64,)>(
+        "SELECT id FROM infrastructure_assets WHERE name = $1 AND commune = $2",
+    )
+    .bind(&probe_name)
+    .bind(&area.commune)
+    .fetch_optional(pool)
+    .await?
+    .map(|row| row.0);
+
+    if run_all || action == "report" {
+        sqlx::query(
+            r#"
+            INSERT INTO field_reports (
+                project_id, site_profile_id, campaign_id, asset_id, report_type,
+                region, department, commune, latitude, longitude, status,
+                evidence_quality, notes, submitted_by
+            )
+            SELECT $1, sp.id, sc.id, $2, 'auto_validation_task',
+                   $3, $4, $5, $6, $7, 'needs_followup',
+                   'system_generated', $8, 'Action workflow'
+            FROM (SELECT 1) seed
+            LEFT JOIN site_profiles sp ON sp.name = $9 AND sp.commune = $5
+            LEFT JOIN survey_campaigns sc ON sc.name = $10 AND sc.target_commune = $5
+            WHERE NOT EXISTS (
+                SELECT 1 FROM field_reports
+                WHERE report_type = 'auto_validation_task'
+                  AND region = $3 AND department = $4 AND commune = $5
+                  AND submitted_by = 'Action workflow'
+            )
+            "#,
+        )
+        .bind(project_id)
+        .bind(asset_id)
+        .bind(&area.region)
+        .bind(&area.department)
+        .bind(&area.commune)
+        .bind(area.latitude)
+        .bind(area.longitude)
+        .bind(format!(
+            "Validate {} with GPS/photo proof. Matrix shows {:.1}% phone ownership and {}% confidence.",
+            area.commune, ownership_rate, confidence_pct
+        ))
+        .bind(&site_name)
+        .bind(&campaign_name)
+        .execute(pool)
+        .await?;
+        created.push("validation report task".into());
+    }
+
+    if run_all || action == "alert" {
+        sqlx::query(
+            r#"
+            INSERT INTO alerts (project_id, site_profile_id, asset_id, severity, title, message, status)
+            SELECT $1, sp.id, $2, $3, $4, $5, 'open'
+            FROM (SELECT 1) seed
+            LEFT JOIN site_profiles sp ON sp.name = $6 AND sp.commune = $7
+            WHERE NOT EXISTS (
+                SELECT 1 FROM alerts WHERE title = $4 AND status <> 'resolved'
+            )
+            "#,
+        )
+        .bind(project_id)
+        .bind(asset_id)
+        .bind(if area.confidence < 0.68 { "warning" } else { "watch" })
+        .bind(format!("{} validation alert", area.commune))
+        .bind(format!(
+            "{} needs field proof before higher-budget action. Confidence is {}%.",
+            area.commune, confidence_pct
+        ))
+        .bind(&site_name)
+        .bind(&area.commune)
+        .execute(pool)
+        .await?;
+        created.push("coverage alert".into());
+    }
+
+    if run_all || action == "ticket" {
+        sqlx::query(
+            r#"
+            INSERT INTO maintenance_tickets (
+                project_id, site_profile_id, asset_id, title, priority, status,
+                assigned_to, due_date, sla_hours
+            )
+            SELECT $1, sp.id, $2, $3, $4, 'open',
+                   'Field operations team', CURRENT_DATE + INTERVAL '7 days', $5
+            FROM (SELECT 1) seed
+            LEFT JOIN site_profiles sp ON sp.name = $6 AND sp.commune = $7
+            WHERE NOT EXISTS (
+                SELECT 1 FROM maintenance_tickets
+                WHERE title = $3 AND status NOT IN ('done', 'completed', 'cancelled')
+            )
+            "#,
+        )
+        .bind(project_id)
+        .bind(asset_id)
+        .bind(format!("{} field follow-up", area.commune))
+        .bind(if area.confidence < 0.68 {
+            "high"
+        } else {
+            "medium"
+        })
+        .bind(if area.confidence < 0.68 { 120 } else { 240 })
+        .bind(&site_name)
+        .bind(&area.commune)
+        .execute(pool)
+        .await?;
+        created.push("maintenance ticket".into());
+    }
+
+    if run_all || action == "decision" {
+        sqlx::query(
+            r#"
+            INSERT INTO decision_snapshots (
+                project_id, site_profile_id, asset_id, title, decision_stage,
+                priority_score, recommended_budget_xaf, owner_name, risk_level,
+                evidence_score, execution_status, rationale, next_action
+            )
+            SELECT $1, sp.id, $2, $3, 'recommended',
+                   $4, $5, 'Field operations lead', $6,
+                   $7, 'not_started', $8, $9
+            FROM (SELECT 1) seed
+            LEFT JOIN site_profiles sp ON sp.name = $10 AND sp.commune = $11
+            WHERE NOT EXISTS (
+                SELECT 1 FROM decision_snapshots
+                WHERE title = $3 AND decision_stage <> 'completed'
+            )
+            "#,
+        )
+        .bind(project_id)
+        .bind(asset_id)
+        .bind(&decision_title)
+        .bind((100.0 - ownership_rate).max(0.0) + ((1.0 - area.confidence) * 30.0))
+        .bind(budget)
+        .bind(if area.confidence < 0.68 { "high" } else { "medium" })
+        .bind(evidence_score)
+        .bind(format!(
+            "{} has {} people, {:.1}% estimated phone ownership, and {}% model confidence.",
+            area.commune, area.population, ownership_rate, confidence_pct
+        ))
+        .bind("Complete field validation, review operator/telemetry evidence, then approve execution.")
+        .bind(&site_name)
+        .bind(&area.commune)
+        .execute(pool)
+        .await?;
+        created.push("decision snapshot".into());
+    }
+
+    Ok(created)
+}
+
+fn render_ops_status_html(app_summary: &Summary, health: &WorkspaceHealth) -> String {
+    format!(
+        r#"<div class="alert alert-success py-2 mb-0">{} arrondissements, {} assets, {} open alerts, {} active tickets.</div>"#,
+        app_summary.commune_count,
+        health.monitored_assets,
+        health.open_alerts,
+        health.active_tickets
+    )
+}
+
+fn render_activity_html(activity: &[WorkspaceActivity]) -> String {
+    if activity.is_empty() {
+        return r#"<div class="empty-state">No workspace activity yet.</div>"#.into();
+    }
+
+    activity
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<article class="compact-card"><div><strong>{}</strong><span>{} &middot; {} &middot; {}</span></div><span class="status-pill">Live</span><p>{}</p></article>"#,
+                escape_html(&item.action),
+                escape_html(&item.related_entity),
+                escape_html(&item.source),
+                escape_html(&item.timestamp),
+                escape_html(&item.description)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 #[get("/api/summary")]
 pub(crate) async fn summary(pool: web::Data<PgPool>) -> impl Responder {
     match fetch_summary(pool.get_ref()).await {
@@ -251,6 +606,323 @@ pub(crate) async fn workspace_dashboard(pool: web::Data<PgPool>) -> impl Respond
         Ok(dashboard) => HttpResponse::Ok().json(dashboard),
         Err(err) => {
             eprintln!("Failed to build workspace dashboard: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/actions/area")]
+pub(crate) async fn run_area_action(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    payload: web::Json<AreaActionRequest>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "data:write").await {
+        return response;
+    }
+    let action = payload.action.trim();
+    if !matches!(
+        action,
+        "site" | "campaign" | "probe" | "report" | "alert" | "ticket" | "decision" | "full"
+    ) {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Unsupported area action.".into(),
+        });
+    }
+
+    let area = match area_from_request(
+        pool.get_ref(),
+        &payload.region,
+        &payload.department,
+        &payload.commune,
+    )
+    .await
+    {
+        Ok(Some(area)) => area,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Area not found in phone matrix.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to load area for action: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    match ensure_area_action(pool.get_ref(), action, &area, payload.project_id).await {
+        Ok(created) => match build_workspace_dashboard(pool.get_ref()).await {
+            Ok(dashboard) => HttpResponse::Ok().json(ActionResult {
+                message: format!(
+                    "{} action completed for {}.",
+                    action.replace('_', " "),
+                    area.commune
+                ),
+                created,
+                dashboard,
+            }),
+            Err(err) => {
+                eprintln!("Failed to build dashboard after action: {}", err);
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        Err(err) => {
+            eprintln!("Failed to run area action: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/workspace-templates/apply")]
+pub(crate) async fn apply_workspace_template(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    payload: web::Json<WorkspaceTemplateApplyRequest>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        return response;
+    }
+
+    let (title, org_type, sector, site_type, form_type, trust_signal) =
+        match payload.template_id.as_str() {
+            "council-water" => (
+                "Council water reliability pilot",
+                "municipal_council",
+                "water",
+                "water_cluster",
+                "gps_photo_survey",
+                "council_agent_verified",
+            ),
+            "ngo-inclusion" => (
+                "NGO digital inclusion baseline",
+                "ngo",
+                "connectivity",
+                "public_asset",
+                "phone_ownership_baseline",
+                "gps_photo_verified",
+            ),
+            "clinic-solar" => (
+                "Clinic solar uptime monitoring",
+                "solar_operator",
+                "solar",
+                "clinic",
+                "asset_condition",
+                "clinic_staff_verified",
+            ),
+            "telecom-probe" => (
+                "Telecom signal probe rollout",
+                "telecom",
+                "connectivity",
+                "telecom_probe_site",
+                "signal_check",
+                "gps_photo_verified",
+            ),
+            _ => {
+                return HttpResponse::BadRequest().json(ApiError {
+                    message: "Unknown workspace template.".into(),
+                })
+            }
+        };
+
+    let area = if let (Some(region), Some(department), Some(commune)) = (
+        payload.region.as_deref(),
+        payload.department.as_deref(),
+        payload.commune.as_deref(),
+    ) {
+        match area_from_request(pool.get_ref(), region, department, commune).await {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("Failed to load template area: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    } else {
+        match fetch_location_stats(pool.get_ref()).await {
+            Ok(mut areas) => {
+                areas.sort_by(|a, b| b.population.cmp(&a.population));
+                areas.into_iter().next()
+            }
+            Err(err) => {
+                eprintln!("Failed to load fallback template area: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    };
+
+    let Some(area) = area else {
+        return HttpResponse::NotFound().json(ApiError {
+            message: "No matrix area is available for the template.".into(),
+        });
+    };
+
+    let org_name = format!("{} client", title);
+    let project_name = format!("{} - {}", title, area.commune);
+    let org_id = match sqlx::query_as::<_, (i64,)>(
+        r#"
+        INSERT INTO organizations (name, org_type, contact_name, contact_email)
+        VALUES ($1, $2, 'Field operations lead', NULL)
+        ON CONFLICT (name)
+        DO UPDATE SET org_type = EXCLUDED.org_type
+        RETURNING id
+        "#,
+    )
+    .bind(&org_name)
+    .bind(org_type)
+    .fetch_one(pool.get_ref())
+    .await
+    {
+        Ok(row) => row.0,
+        Err(err) => {
+            eprintln!("Failed to apply template organization: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let project_id = match sqlx::query_as::<_, (i64,)>(
+        r#"
+        INSERT INTO projects (
+            organization_id, name, sector, region, status, language_mode,
+            channel_strategy, target_segment, start_date
+        ) VALUES ($1, $2, $3, $4, 'planning', 'bilingual', 'field_team_whatsapp_sms', 'council_ngo_operator', CURRENT_DATE)
+        ON CONFLICT (organization_id, name)
+        DO UPDATE SET
+            sector = EXCLUDED.sector,
+            region = EXCLUDED.region,
+            status = EXCLUDED.status
+        RETURNING id
+        "#,
+    )
+    .bind(org_id)
+    .bind(&project_name)
+    .bind(sector)
+    .bind(&area.region)
+    .fetch_one(pool.get_ref())
+    .await
+    {
+        Ok(row) => row.0,
+        Err(err) => {
+            eprintln!("Failed to apply template project: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let mut created = vec![
+        format!("organization: {}", org_name),
+        format!("project: {}", project_name),
+    ];
+    if let Err(err) = sqlx::query(
+        r#"
+        INSERT INTO site_profiles (
+            project_id, name, site_type, region, department, commune, latitude,
+            longitude, beneficiary_estimate, trust_signal, access_notes
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (name, commune)
+        DO UPDATE SET
+            project_id = EXCLUDED.project_id,
+            site_type = EXCLUDED.site_type,
+            trust_signal = EXCLUDED.trust_signal,
+            access_notes = EXCLUDED.access_notes
+        "#,
+    )
+    .bind(project_id)
+    .bind(format!("{} {}", area.commune, site_type.replace('_', " ")))
+    .bind(site_type)
+    .bind(&area.region)
+    .bind(&area.department)
+    .bind(&area.commune)
+    .bind(area.latitude)
+    .bind(area.longitude)
+    .bind(area.population)
+    .bind(trust_signal)
+    .bind(format!(
+        "{} template created for {}. Collect GPS/photo proof and named focal point.",
+        title, area.commune
+    ))
+    .execute(pool.get_ref())
+    .await
+    {
+        eprintln!("Failed to apply template site: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    created.push(format!("template site type: {}", site_type));
+
+    if let Err(err) = sqlx::query(
+        r#"
+        INSERT INTO survey_campaigns (
+            project_id, name, form_type, target_region, target_department,
+            target_commune, status, language_mode, offline_enabled, starts_on, ends_on
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'draft', 'bilingual', TRUE, CURRENT_DATE, CURRENT_DATE + INTERVAL '21 days')
+        ON CONFLICT (project_id, name)
+        DO UPDATE SET
+            form_type = EXCLUDED.form_type,
+            offline_enabled = TRUE,
+            ends_on = EXCLUDED.ends_on
+        "#,
+    )
+    .bind(project_id)
+    .bind(format!("{} {}", area.commune, form_type.replace('_', " ")))
+    .bind(form_type)
+    .bind(&area.region)
+    .bind(&area.department)
+    .bind(&area.commune)
+    .execute(pool.get_ref())
+    .await
+    {
+        eprintln!("Failed to apply template campaign: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    created.push(format!("template campaign: {}", form_type));
+
+    match ensure_area_action(pool.get_ref(), "decision", &area, Some(project_id)).await {
+        Ok(mut action_created) => created.append(&mut action_created),
+        Err(err) => {
+            eprintln!("Failed to apply template decision: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+
+    match build_workspace_dashboard(pool.get_ref()).await {
+        Ok(dashboard) => HttpResponse::Ok().json(ActionResult {
+            message: format!("Template '{}' applied to {}.", title, area.commune),
+            created,
+            dashboard,
+        }),
+        Err(err) => {
+            eprintln!("Failed to build dashboard after template: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/fragments/ops-status")]
+pub(crate) async fn ops_status_fragment(pool: web::Data<PgPool>) -> impl Responder {
+    let app_summary = match fetch_summary(pool.get_ref()).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to build ops fragment summary: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let health = match build_workspace_health(pool.get_ref()).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to build ops fragment health: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(render_ops_status_html(&app_summary, &health))
+}
+
+#[get("/fragments/workspace-activity")]
+pub(crate) async fn workspace_activity_fragment(pool: web::Data<PgPool>) -> impl Responder {
+    match build_workspace_dashboard(pool.get_ref()).await {
+        Ok(dashboard) => HttpResponse::Ok()
+            .content_type("text/html; charset=utf-8")
+            .body(render_activity_html(&dashboard.activity)),
+        Err(err) => {
+            eprintln!("Failed to render workspace activity fragment: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }

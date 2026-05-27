@@ -49,7 +49,7 @@
         </div>
         <div class="header-actions">
           <div id="auth-status" aria-live="polite"></div>
-          <div id="data-status" aria-live="polite"></div>
+          <div id="data-status" aria-live="polite" hx-get="/fragments/ops-status" hx-trigger="load, refresh, every 15s" hx-swap="innerHTML"></div>
           <button class="btn btn-primary" id="refresh-button"><i data-lucide="refresh-cw"></i> Refresh data</button>
         </div>
       </header>
@@ -231,7 +231,7 @@
               <h2>Workspace activity</h2>
             </div>
           </div>
-          <div id="workspace-activity" class="list-stack"></div>
+          <div id="workspace-activity" class="list-stack" hx-get="/fragments/workspace-activity" hx-trigger="load, refresh, every 20s" hx-swap="innerHTML"></div>
         </section>
 
         <div class="summary-grid" id="signal-probe-health"></div>
@@ -918,6 +918,7 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <script src="htmx.min.js"></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script src="app.js?v=20260527-ui-system"></script>
 </body>

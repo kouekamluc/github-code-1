@@ -807,6 +807,30 @@ pub(crate) struct WorkspaceDashboard {
     pub(crate) market_realities: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct AreaActionRequest {
+    pub(crate) action: String,
+    pub(crate) region: String,
+    pub(crate) department: String,
+    pub(crate) commune: String,
+    pub(crate) project_id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WorkspaceTemplateApplyRequest {
+    pub(crate) template_id: String,
+    pub(crate) region: Option<String>,
+    pub(crate) department: Option<String>,
+    pub(crate) commune: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ActionResult {
+    pub(crate) message: String,
+    pub(crate) created: Vec<String>,
+    pub(crate) dashboard: WorkspaceDashboard,
+}
+
 #[derive(Serialize, Clone)]
 pub(crate) struct PhoneMatrixAssumptions {
     pub(crate) adult_share: f64,

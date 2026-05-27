@@ -459,6 +459,8 @@
             </div>
             <form id="decision-snapshot-form" novalidate>
               <select class="form-select mb-2" id="decisionProject"></select>
+              <select class="form-select mb-2" id="decisionSite"></select>
+              <select class="form-select mb-2" id="decisionAsset"></select>
               <input class="form-control mb-2" id="decisionTitle" placeholder="Decision title" required />
               <select class="form-select mb-2" id="decisionStage">
                 <option value="draft">Draft</option>
@@ -670,6 +672,8 @@
               </div>
             </div>
             <form id="report-form" novalidate>
+              <select class="form-select mb-2" id="reportCampaignId"></select>
+              <select class="form-select mb-2" id="reportSiteId"></select>
               <select class="form-select mb-2" id="reportAssetId"></select>
               <input class="form-control mb-2" id="reportType" placeholder="Report type" required />
               <input class="form-control mb-2" id="reportRegion" placeholder="Region" required />
@@ -712,6 +716,7 @@
               </div>
             </div>
             <form id="alert-form" novalidate>
+              <select class="form-select mb-2" id="alertSiteId"></select>
               <select class="form-select mb-2" id="alertAssetId"></select>
               <select class="form-select mb-2" id="alertSeverity">
                 <option value="warning">Warning</option>
@@ -748,10 +753,10 @@
             </div>
             <form id="ticket-form" novalidate>
               <input class="form-control mb-2" id="ticketTitle" placeholder="Ticket title" required />
-              <div class="row g-2 mb-2">
-                <div class="col"><input type="number" class="form-control" id="ticketAssetId" placeholder="Asset ID" /></div>
-                <div class="col"><input type="number" class="form-control" id="ticketAlertId" placeholder="Alert ID" /></div>
-              </div>
+              <select class="form-select mb-2" id="ticketProjectId"></select>
+              <select class="form-select mb-2" id="ticketSiteId"></select>
+              <select class="form-select mb-2" id="ticketAssetId"></select>
+              <select class="form-select mb-2" id="ticketAlertId"></select>
               <select class="form-select mb-2" id="ticketPriority">
                 <option value="urgent">Urgent</option>
                 <option value="high">High</option>
@@ -843,6 +848,7 @@
               <input class="form-control mb-2" id="imeiOperator" placeholder="Operator or ISP name" required />
               <input class="form-control mb-2" id="imeiValue" placeholder="IMEI from operator API" />
               <input class="form-control mb-2" id="imeiHash" placeholder="IMEI hash if raw IMEI is not shared" />
+              <input class="form-control mb-2" id="imeiDeviceType" placeholder="Device type or TAC class" />
               <select class="form-select mb-2" id="imeiEventType">
                 <option value="activation">Activation</option>
                 <option value="verification">Verification</option>
@@ -859,7 +865,11 @@
               </select>
               <div class="row g-2 mb-2">
                 <div class="col"><input class="form-control" id="imeiRegion" placeholder="Region" /></div>
+                <div class="col"><input class="form-control" id="imeiDepartment" placeholder="Department" /></div>
+              </div>
+              <div class="row g-2 mb-2">
                 <div class="col"><input class="form-control" id="imeiCommune" placeholder="Arrondissement" /></div>
+                <div class="col"><input type="datetime-local" class="form-control" id="imeiFirstSeen" /></div>
               </div>
               <input class="form-control mb-2" id="imeiReference" placeholder="Operator reference ID" />
               <button class="btn btn-primary w-100"><i data-lucide="shield-check"></i> Save IMEI event</button>
@@ -920,6 +930,6 @@
   <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
   <script src="htmx.min.js"></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-  <script src="app.js?v=20260527-ui-system"></script>
+  <script src="app.js?v=20260527-backend-mapping"></script>
 </body>
 </html>

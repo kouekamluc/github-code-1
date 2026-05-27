@@ -551,6 +551,7 @@ function openCampaignFollowUp(campaignId) {
   const campaign = campaigns.find(item => item.id === Number(campaignId));
   if (!campaign) return switchView('workspaces');
   switchView('reports');
+  document.getElementById('reportCampaignId').value = campaign.id;
   document.getElementById('reportType').value = campaign.form_type;
   document.getElementById('reportRegion').value = campaign.target_region || '';
   document.getElementById('reportDepartment').value = campaign.target_department || '';
@@ -988,7 +989,7 @@ function renderWorkspaces() {
     `<option value="${organization.id}">${escapeHtml(organization.name)}</option>`
   )).join('');
 
-  ['siteProject', 'campaignProject', 'decisionProject', 'assetProject'].forEach(id => {
+  ['siteProject', 'campaignProject', 'decisionProject', 'assetProject', 'ticketProjectId'].forEach(id => {
     const select = document.getElementById(id);
     if (!select) return;
     select.innerHTML = '<option value="">No project</option>' + projects.map(project => (
@@ -1285,12 +1286,18 @@ function renderWorkspaces() {
       if (button.dataset.action === 'decision') return prepareAreaAction('decision', area);
       if (button.dataset.action === 'alert') {
         switchView('alerts');
+        document.getElementById('alertSiteId').value = site.id;
+        document.getElementById('alertAssetId').value = '';
         document.getElementById('alertTitle').value = `${site.name} validation alert`;
         document.getElementById('alertMessage').value = `${site.commune} site needs field validation. ${site.access_notes || 'Review access and trust proof.'}`;
         document.getElementById('alertTitle').focus();
       }
       if (button.dataset.action === 'ticket') {
         switchView('tickets');
+        document.getElementById('ticketProjectId').value = site.project_id || '';
+        document.getElementById('ticketSiteId').value = site.id;
+        document.getElementById('ticketAssetId').value = '';
+        document.getElementById('ticketAlertId').value = '';
         document.getElementById('ticketTitle').value = `${site.name} field follow-up`;
         document.getElementById('ticketPriority').value = 'high';
         document.getElementById('ticketTitle').focus();
@@ -1304,6 +1311,7 @@ function renderWorkspaces() {
       if (!campaign) return;
       if (button.dataset.action === 'reports') {
         switchView('reports');
+        document.getElementById('reportCampaignId').value = campaign.id;
         document.getElementById('reportType').value = campaign.form_type;
         document.getElementById('reportRegion').value = campaign.target_region || '';
         document.getElementById('reportDepartment').value = campaign.target_department || '';
@@ -1313,6 +1321,12 @@ function renderWorkspaces() {
       if (button.dataset.action === 'decision') {
         switchView('workspaces');
         document.getElementById('decisionProject').value = campaign.project_id || '';
+        document.getElementById('decisionSite').value = sites.find(site => (
+          normalizeAreaPart(site.region) === normalizeAreaPart(campaign.target_region)
+          && normalizeAreaPart(site.department) === normalizeAreaPart(campaign.target_department)
+          && normalizeAreaPart(site.commune) === normalizeAreaPart(campaign.target_commune)
+        ))?.id || '';
+        document.getElementById('decisionAsset').value = '';
         document.getElementById('decisionTitle').value = `${campaign.name} evidence decision`;
         document.getElementById('decisionRationale').value = `${campaign.name} is ${campaign.status} for ${campaign.target_commune || campaign.target_region || 'the target area'} and should be converted into an evidence-backed decision.`;
         document.getElementById('decisionNextAction').value = 'Review submitted reports, confirm evidence quality, and approve the next field action.';
@@ -1577,14 +1591,73 @@ function assetOptionLabel(asset) {
   return `#${asset.id} ${asset.name} - ${asset.commune} (${asset.status})`;
 }
 
+function siteOptionLabel(site) {
+  return `#${site.id} ${site.name} - ${site.commune}`;
+}
+
+function campaignOptionLabel(campaign) {
+  return `#${campaign.id} ${campaign.name} - ${campaign.target_commune || campaign.target_region || 'National'}`;
+}
+
+function alertOptionLabel(alert) {
+  return `#${alert.id} ${alert.title} (${alert.status})`;
+}
+
+function projectOptionLabel(project) {
+  return `#${project.id} ${project.name}`;
+}
+
+function setSelectOptions(select, placeholder, rows, labelBuilder, selectedValue = '') {
+  if (!select) return;
+  const selected = selectedValue || select.value;
+  select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`
+    + rows.map(row => `<option value="${row.id}">${escapeHtml(labelBuilder(row))}</option>`).join('');
+  if (selected && rows.some(row => String(row.id) === String(selected))) {
+    select.value = selected;
+  }
+}
+
+function projectIdFromLinkedRecords({ projectId, siteId, assetId, campaignId, alertId }) {
+  if (projectId) return Number(projectId);
+  const asset = assets.find(item => item.id === Number(assetId));
+  if (asset?.project_id) return asset.project_id;
+  const site = sites.find(item => item.id === Number(siteId || asset?.site_profile_id));
+  if (site?.project_id) return site.project_id;
+  const campaign = campaigns.find(item => item.id === Number(campaignId));
+  if (campaign?.project_id) return campaign.project_id;
+  const alert = alerts.find(item => item.id === Number(alertId));
+  if (alert?.project_id) return alert.project_id;
+  return null;
+}
+
 function populateAssetLinkedControls() {
   const reportSelect = document.getElementById('reportAssetId');
+  const reportSiteSelect = document.getElementById('reportSiteId');
+  const reportCampaignSelect = document.getElementById('reportCampaignId');
   const alertSelect = document.getElementById('alertAssetId');
+  const alertSiteSelect = document.getElementById('alertSiteId');
   const iotSelect = document.getElementById('iotAssetId');
-  const options = assets.map(asset => `<option value="${asset.id}">${escapeHtml(assetOptionLabel(asset))}</option>`).join('');
-  if (reportSelect) reportSelect.innerHTML = '<option value="">No linked asset</option>' + options;
-  if (alertSelect) alertSelect.innerHTML = '<option value="">General coverage alert</option>' + options;
-  if (iotSelect) iotSelect.innerHTML = '<option value="">Select monitored probe or asset</option>' + options;
+  const decisionSiteSelect = document.getElementById('decisionSite');
+  const decisionAssetSelect = document.getElementById('decisionAsset');
+  const ticketProjectSelect = document.getElementById('ticketProjectId');
+  const ticketSiteSelect = document.getElementById('ticketSiteId');
+  const ticketAssetSelect = document.getElementById('ticketAssetId');
+  const ticketAlertSelect = document.getElementById('ticketAlertId');
+
+  setSelectOptions(reportSelect, 'No linked asset', assets, assetOptionLabel);
+  setSelectOptions(alertSelect, 'General coverage alert', assets, assetOptionLabel);
+  setSelectOptions(iotSelect, 'Select monitored probe or asset', assets, assetOptionLabel);
+  setSelectOptions(decisionAssetSelect, 'No linked asset', assets, assetOptionLabel);
+  setSelectOptions(ticketAssetSelect, 'No linked asset', assets, assetOptionLabel);
+
+  setSelectOptions(reportSiteSelect, 'No linked site profile', sites, siteOptionLabel);
+  setSelectOptions(alertSiteSelect, 'No linked site profile', sites, siteOptionLabel);
+  setSelectOptions(decisionSiteSelect, 'No linked site profile', sites, siteOptionLabel);
+  setSelectOptions(ticketSiteSelect, 'No linked site profile', sites, siteOptionLabel);
+
+  setSelectOptions(reportCampaignSelect, 'No linked campaign', campaigns, campaignOptionLabel);
+  setSelectOptions(ticketAlertSelect, 'No linked alert', alerts, alertOptionLabel);
+  setSelectOptions(ticketProjectSelect, 'Infer project from linked record', projects, projectOptionLabel);
 }
 
 function fillTelemetryCoordinatesFromAsset() {
@@ -1823,6 +1896,8 @@ function renderAlerts() {
       const alert = alerts.find(item => item.id === Number(button.dataset.id));
       if (!alert) return;
       switchView('tickets');
+      document.getElementById('ticketProjectId').value = alert.project_id || '';
+      document.getElementById('ticketSiteId').value = alert.site_profile_id || '';
       document.getElementById('ticketAlertId').value = alert.id;
       document.getElementById('ticketAssetId').value = alert.asset_id || '';
       document.getElementById('ticketTitle').value = `${alert.title} follow-up`;
@@ -2562,6 +2637,14 @@ function prepareAreaAction(action, area) {
   if (action === 'report') {
     switchView('reports');
     const localAsset = assets.find(asset => areaKey(asset) === areaKey(area));
+    const localSite = sites.find(site => areaKey(site) === areaKey(area));
+    const localCampaign = campaigns.find(campaign => (
+      (!campaign.target_region || normalizeAreaPart(campaign.target_region) === normalizeAreaPart(area.region))
+      && (!campaign.target_department || normalizeAreaPart(campaign.target_department) === normalizeAreaPart(area.department))
+      && (!campaign.target_commune || normalizeAreaPart(campaign.target_commune) === normalizeAreaPart(area.commune))
+    ));
+    document.getElementById('reportCampaignId').value = localCampaign?.id || '';
+    document.getElementById('reportSiteId').value = localSite?.id || localAsset?.site_profile_id || '';
     document.getElementById('reportAssetId').value = localAsset?.id || '';
     document.getElementById('reportType').value = area.confidence < 0.7 ? 'Phone access ground-truth check' : 'GPS/photo validation';
     document.getElementById('reportRegion').value = area.region;
@@ -2576,7 +2659,11 @@ function prepareAreaAction(action, area) {
   }
   if (action === 'decision') {
     const priority = priorityForArea(area);
+    const localAsset = assets.find(asset => areaKey(asset) === areaKey(area));
+    const localSite = sites.find(site => areaKey(site) === areaKey(area));
     document.getElementById('decisionProject').value = project?.id || '';
+    document.getElementById('decisionSite').value = localSite?.id || localAsset?.site_profile_id || '';
+    document.getElementById('decisionAsset').value = localAsset?.id || '';
     document.getElementById('decisionTitle').value = `${area.commune} validation decision`;
     document.getElementById('decisionStage').value = 'recommended';
     document.getElementById('decisionScore').value = priority ? priority.priority_score.toFixed(0) : '';
@@ -2634,6 +2721,7 @@ function prepareAssetAction(action, asset) {
   }
   if (action === 'report') {
     switchView('reports');
+    document.getElementById('reportSiteId').value = asset.site_profile_id || '';
     document.getElementById('reportAssetId').value = asset.id;
     document.getElementById('reportType').value = asset.status === 'online' ? 'Routine probe verification' : 'Signal probe exception check';
     document.getElementById('reportRegion').value = asset.region;
@@ -2818,6 +2906,7 @@ document.getElementById('asset-form').addEventListener('submit', async event => 
     assets = await fetchJson('/api/assets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
     workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
+    populateAssetLinkedControls();
     renderAssets();
     renderWorkspaces();
     updateView();
@@ -2832,9 +2921,17 @@ document.getElementById('asset-form').addEventListener('submit', async event => 
 document.getElementById('report-form').addEventListener('submit', async event => {
   event.preventDefault();
   const reportAsset = assets.find(asset => asset.id === Number(document.getElementById('reportAssetId').value));
+  const reportSite = sites.find(site => site.id === Number(document.getElementById('reportSiteId').value || reportAsset?.site_profile_id));
+  const reportCampaign = campaigns.find(campaign => campaign.id === Number(document.getElementById('reportCampaignId').value));
   const payload = {
-    project_id: reportAsset?.project_id || null,
-    site_profile_id: reportAsset?.site_profile_id || null,
+    project_id: projectIdFromLinkedRecords({
+      projectId: null,
+      siteId: reportSite?.id,
+      assetId: reportAsset?.id,
+      campaignId: reportCampaign?.id,
+    }),
+    site_profile_id: reportSite?.id || reportAsset?.site_profile_id || null,
+    campaign_id: reportCampaign?.id || null,
     asset_id: document.getElementById('reportAssetId').value ? Number(document.getElementById('reportAssetId').value) : null,
     report_type: document.getElementById('reportType').value.trim(),
     region: document.getElementById('reportRegion').value.trim(),
@@ -2850,8 +2947,10 @@ document.getElementById('report-form').addEventListener('submit', async event =>
   try {
     reports = await fetchJson('/api/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
+    workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
     renderReports();
     renderAssets();
+    renderWorkspaces();
     updateView();
     setStatus(document.getElementById('report-status'), 'Report submitted.', 'success');
     event.target.reset();
@@ -2863,9 +2962,14 @@ document.getElementById('report-form').addEventListener('submit', async event =>
 document.getElementById('alert-form').addEventListener('submit', async event => {
   event.preventDefault();
   const alertAsset = assets.find(asset => asset.id === Number(document.getElementById('alertAssetId').value));
+  const alertSite = sites.find(site => site.id === Number(document.getElementById('alertSiteId').value || alertAsset?.site_profile_id));
   const payload = {
-    project_id: alertAsset?.project_id || null,
-    site_profile_id: alertAsset?.site_profile_id || null,
+    project_id: projectIdFromLinkedRecords({
+      projectId: null,
+      siteId: alertSite?.id,
+      assetId: alertAsset?.id,
+    }),
+    site_profile_id: alertSite?.id || alertAsset?.site_profile_id || null,
     asset_id: alertAsset?.id || null,
     severity: document.getElementById('alertSeverity').value,
     title: document.getElementById('alertTitle').value.trim(),
@@ -2905,6 +3009,7 @@ document.getElementById('organization-form').addEventListener('submit', async ev
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
     renderWorkspaces();
     setStatus(document.getElementById('organization-status'), 'Organization saved.', 'success');
     event.target.reset();
@@ -2929,6 +3034,7 @@ document.getElementById('project-form').addEventListener('submit', async event =
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
     renderWorkspaces();
     setStatus(document.getElementById('project-status'), 'Project saved.', 'success');
     event.target.reset();
@@ -2994,8 +3100,17 @@ document.getElementById('campaign-form').addEventListener('submit', async event 
 
 document.getElementById('decision-snapshot-form').addEventListener('submit', async event => {
   event.preventDefault();
+  const decisionProjectId = document.getElementById('decisionProject').value;
+  const decisionSiteId = document.getElementById('decisionSite').value;
+  const decisionAssetId = document.getElementById('decisionAsset').value;
   const payload = {
-    project_id: document.getElementById('decisionProject').value ? Number(document.getElementById('decisionProject').value) : null,
+    project_id: projectIdFromLinkedRecords({
+      projectId: decisionProjectId,
+      siteId: decisionSiteId,
+      assetId: decisionAssetId,
+    }),
+    site_profile_id: decisionSiteId ? Number(decisionSiteId) : null,
+    asset_id: decisionAssetId ? Number(decisionAssetId) : null,
     title: document.getElementById('decisionTitle').value.trim(),
     decision_stage: document.getElementById('decisionStage').value,
     priority_score: document.getElementById('decisionScore').value ? Number(document.getElementById('decisionScore').value) : null,
@@ -3023,11 +3138,18 @@ document.getElementById('decision-snapshot-form').addEventListener('submit', asy
 document.getElementById('ticket-form').addEventListener('submit', async event => {
   event.preventDefault();
   const ticketAsset = assets.find(asset => asset.id === Number(document.getElementById('ticketAssetId').value));
+  const ticketAlert = alerts.find(alert => alert.id === Number(document.getElementById('ticketAlertId').value));
+  const ticketSite = sites.find(site => site.id === Number(document.getElementById('ticketSiteId').value || ticketAsset?.site_profile_id || ticketAlert?.site_profile_id));
   const payload = {
-    project_id: ticketAsset?.project_id || null,
-    site_profile_id: ticketAsset?.site_profile_id || null,
-    asset_id: document.getElementById('ticketAssetId').value ? Number(document.getElementById('ticketAssetId').value) : null,
-    alert_id: document.getElementById('ticketAlertId').value ? Number(document.getElementById('ticketAlertId').value) : null,
+    project_id: projectIdFromLinkedRecords({
+      projectId: document.getElementById('ticketProjectId').value,
+      siteId: ticketSite?.id,
+      assetId: ticketAsset?.id || ticketAlert?.asset_id,
+      alertId: ticketAlert?.id,
+    }),
+    site_profile_id: ticketSite?.id || ticketAsset?.site_profile_id || ticketAlert?.site_profile_id || null,
+    asset_id: ticketAsset?.id || ticketAlert?.asset_id || null,
+    alert_id: ticketAlert?.id || null,
     title: document.getElementById('ticketTitle').value.trim(),
     priority: document.getElementById('ticketPriority').value,
     assigned_to: document.getElementById('ticketAssignedTo').value.trim() || null,
@@ -3095,12 +3217,15 @@ document.getElementById('imei-event-form')?.addEventListener('submit', async eve
     operator_name: document.getElementById('imeiOperator').value.trim(),
     imei: document.getElementById('imeiValue').value.trim() || null,
     imei_hash: document.getElementById('imeiHash').value.trim() || null,
+    device_type: document.getElementById('imeiDeviceType').value.trim() || null,
     event_type: document.getElementById('imeiEventType').value,
     compliance_status: document.getElementById('imeiComplianceStatus').value,
     region: document.getElementById('imeiRegion').value.trim() || null,
+    department: document.getElementById('imeiDepartment').value.trim() || null,
     commune: document.getElementById('imeiCommune').value.trim() || null,
     source_system: 'operator_api',
     raw_reference: document.getElementById('imeiReference').value.trim() || null,
+    network_first_seen_at: document.getElementById('imeiFirstSeen').value || null,
   };
   try {
     imeiCompliance = await fetchJson('/api/operator-imei-events', {

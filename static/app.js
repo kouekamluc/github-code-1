@@ -253,6 +253,35 @@ function areaKey(item) {
   return `${item.region}|${item.department}|${item.commune}`;
 }
 
+function normalizeAreaPart(value) {
+  return (value || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function areaMatchesLocation(area, item) {
+  return normalizeAreaPart(area.region) === normalizeAreaPart(item.region)
+    && normalizeAreaPart(area.department) === normalizeAreaPart(item.department)
+    && normalizeAreaPart(area.commune) === normalizeAreaPart(item.commune);
+}
+
+function areaFromLocation(item) {
+  if (!item) return null;
+  const exact = allStats.find(area => areaMatchesLocation(area, item));
+  if (exact) return exact;
+  const nearby = allStats
+    .filter(area => normalizeAreaPart(area.region) === normalizeAreaPart(item.region))
+    .map(area => ({
+      area,
+      distance: Math.abs(Number(area.latitude || 0) - Number(item.latitude || 0))
+        + Math.abs(Number(area.longitude || 0) - Number(item.longitude || 0)),
+    }))
+    .sort((a, b) => a.distance - b.distance)[0];
+  if (nearby && nearby.distance <= 0.35) return nearby.area;
+  return allStats.find(area => (
+    normalizeAreaPart(area.region) === normalizeAreaPart(item.region)
+    && normalizeAreaPart(area.department) === normalizeAreaPart(item.department)
+  )) || null;
+}
+
 function selectArea(area, view = 'profile') {
   selectedArea = area;
   renderAreaProfile();
@@ -322,11 +351,7 @@ function probeHealthFor(asset) {
 }
 
 function assetArea(asset) {
-  return allStats.find(area => (
-    area.region === asset.region
-    && area.department === asset.department
-    && area.commune === asset.commune
-  ));
+  return areaFromLocation(asset);
 }
 
 function assetContext(asset) {
@@ -422,37 +447,54 @@ function renderAuthState() {
 function renderSummary(summary, overview = overviewIntelligence) {
   if (overview?.kpis?.length) {
     summaryCards.innerHTML = overview.kpis.map((kpi, index) => `
-      <div class="metric-tile accent-${escapeHtml(kpi.tone)} ${index === 0 ? 'featured-metric' : ''}">
+      <div class="metric-tile clickable-card summary-nav-card accent-${escapeHtml(kpi.tone)} ${index === 0 ? 'featured-metric' : ''}" role="button" tabindex="0" data-view="${index === 0 ? 'priority' : index === 1 ? 'workspaces' : index === 2 ? 'tickets' : 'areas'}">
         <span>${escapeHtml(kpi.label)}</span>
         <strong>${escapeHtml(kpi.value)}</strong>
         <small>${escapeHtml(kpi.detail)}</small>
       </div>
     `).join('');
+    bindSummaryNavCards();
     return;
   }
 
   summaryCards.innerHTML = `
-    <div class="metric-tile accent-bronze featured-metric">
+    <div class="metric-tile clickable-card summary-nav-card accent-bronze featured-metric" role="button" tabindex="0" data-view="areas">
       <span>Estimated phone owners</span>
       <strong>${formatNumber(summary.total_phone_owners)}</strong>
       <small>Modeled across ${summary.estimated_location_count} arrondissements</small>
     </div>
-    <div class="metric-tile accent-green">
+    <div class="metric-tile clickable-card summary-nav-card accent-green" role="button" tabindex="0" data-view="areas">
       <span>Population covered</span>
       <strong>${formatNumber(summary.total_population)}</strong>
       <small>${summary.commune_count} arrondissements in the national matrix</small>
     </div>
-    <div class="metric-tile accent-gold">
+    <div class="metric-tile clickable-card summary-nav-card accent-gold" role="button" tabindex="0" data-view="areas">
       <span>Estimated ownership rate</span>
       <strong>${formatRate(summary.percent_with_phone)}</strong>
       <small>Blended from population, GPS, and telecom baselines</small>
     </div>
-    <div class="metric-tile accent-red">
+    <div class="metric-tile clickable-card summary-nav-card accent-red" role="button" tabindex="0" data-view="areas">
       <span>Departments covered</span>
       <strong>${summary.department_count}</strong>
       <small>${summary.region_count} regions mapped</small>
     </div>
   `;
+  bindSummaryNavCards();
+}
+
+function bindSummaryNavCards() {
+  document.querySelectorAll('.summary-nav-card').forEach(card => {
+    const open = () => switchView(card.dataset.view);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 function areaFromOpportunity(opportunity) {
@@ -487,6 +529,62 @@ function areaFromAction(action) {
 function openAreaFollowUp(area, view = 'profile') {
   if (!area) return;
   selectArea(area, view);
+}
+
+function areaForAssetId(assetId) {
+  const asset = assets.find(item => item.id === Number(assetId));
+  return asset && assetArea(asset);
+}
+
+function areaForSiteId(siteId) {
+  const site = sites.find(item => item.id === Number(siteId));
+  return site && areaFromLocation(site);
+}
+
+function openSiteFollowUp(siteId) {
+  const area = areaForSiteId(siteId);
+  if (area) openAreaFollowUp(area);
+  else switchView('workspaces');
+}
+
+function openCampaignFollowUp(campaignId) {
+  const campaign = campaigns.find(item => item.id === Number(campaignId));
+  if (!campaign) return switchView('workspaces');
+  switchView('reports');
+  document.getElementById('reportType').value = campaign.form_type;
+  document.getElementById('reportRegion').value = campaign.target_region || '';
+  document.getElementById('reportDepartment').value = campaign.target_department || '';
+  document.getElementById('reportCommune').value = campaign.target_commune || '';
+  document.getElementById('reportType').focus();
+}
+
+function openAlertFollowUp(alertId) {
+  const alert = alerts.find(item => item.id === Number(alertId));
+  if (!alert) return switchView('alerts');
+  const area = alert.asset_id ? areaForAssetId(alert.asset_id) : areaForSiteId(alert.site_profile_id);
+  if (area) openAreaFollowUp(area);
+  else switchView('alerts');
+}
+
+function openTicketFollowUp(ticketId) {
+  const ticket = tickets.find(item => item.id === Number(ticketId));
+  if (!ticket) return switchView('tickets');
+  const area = ticket.asset_id ? areaForAssetId(ticket.asset_id) : areaForSiteId(ticket.site_profile_id);
+  if (area) openAreaFollowUp(area);
+  else switchView('tickets');
+}
+
+function openDecisionFollowUp(item) {
+  const area = item?.asset_id ? areaForAssetId(item.asset_id) : areaForSiteId(item?.site_profile_id);
+  if (area) openAreaFollowUp(area);
+  else switchView('decision');
+}
+
+function focusWorkspaceList(value) {
+  switchView('workspaces');
+  if (workspaceSearch) workspaceSearch.value = value || '';
+  renderWorkspaces();
+  document.getElementById('project-operating-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function cardClickGuard(event) {
@@ -762,27 +860,27 @@ function renderAreaProfile(area = selectedArea) {
       <section class="surface nested-surface">
         <div class="surface-header"><div><p class="eyebrow">Proof layer</p><h2>Sites</h2></div><span class="status-pill">${localSites.length}</span></div>
         <div class="list-stack">${localSites.length ? localSites.map(site => `
-          <article class="mini-card"><strong>${escapeHtml(site.name)}</strong><span>${escapeHtml(site.site_type)} &middot; ${formatNumber(site.beneficiary_estimate || 0)} beneficiaries</span><p>${escapeHtml(site.trust_signal)} &middot; ${escapeHtml(site.access_notes || 'No access notes')}</p></article>
+          <article class="mini-card clickable-card profile-site-card" role="button" tabindex="0" data-site="${site.id}"><strong>${escapeHtml(site.name)}</strong><span>${escapeHtml(site.site_type)} &middot; ${formatNumber(site.beneficiary_estimate || 0)} beneficiaries</span><p>${escapeHtml(site.trust_signal)} &middot; ${escapeHtml(site.access_notes || 'No access notes')}</p></article>
         `).join('') : '<div class="empty-state">No site profile in this arrondissement.</div>'}</div>
       </section>
       <section class="surface nested-surface">
         <div class="surface-header"><div><p class="eyebrow">Monitored assets</p><h2>Assets</h2></div><span class="status-pill">${localAssets.length}</span></div>
         <div class="list-stack">${localAssets.length ? localAssets.map(asset => `
-          <article class="mini-card status-${escapeHtml(asset.status)}"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)} &middot; ${escapeHtml(probeHealthFor(asset)?.health_label || 'Not scored')}</span><p>${escapeHtml(asset.operator || 'No operator')} &middot; ${escapeHtml(asset.notes || 'No notes')}</p><div class="ticket-actions"><button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}">Telemetry</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="report" data-id="${asset.id}">Report</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}">Ticket</button></div></article>
+          <article class="mini-card clickable-card profile-asset-card status-${escapeHtml(asset.status)}" role="button" tabindex="0" data-id="${asset.id}"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.asset_type)} &middot; ${escapeHtml(asset.status)} &middot; ${escapeHtml(probeHealthFor(asset)?.health_label || 'Not scored')}</span><p>${escapeHtml(asset.operator || 'No operator')} &middot; ${escapeHtml(asset.notes || 'No notes')}</p><div class="ticket-actions"><button class="btn btn-sm btn-outline-secondary asset-action" data-action="telemetry" data-id="${asset.id}">Telemetry</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="report" data-id="${asset.id}">Report</button><button class="btn btn-sm btn-outline-secondary asset-action" data-action="ticket" data-id="${asset.id}">Ticket</button></div></article>
         `).join('') : '<div class="empty-state">No monitored assets here.</div>'}</div>
       </section>
       <section class="surface nested-surface">
         <div class="surface-header"><div><p class="eyebrow">Ground truth</p><h2>Reports and campaigns</h2></div><span class="status-pill">${localReports.length + localCampaigns.length}</span></div>
         <div class="list-stack">${[
-          ...localCampaigns.map(campaign => `<article class="mini-card"><strong>${escapeHtml(campaign.name)}</strong><span>${escapeHtml(campaign.form_type)} &middot; ${escapeHtml(campaign.status)}</span><p>${campaign.offline_enabled ? 'Offline-ready' : 'Online only'} &middot; ${escapeHtml(campaign.language_mode)}</p></article>`),
-          ...localReports.slice(0, 4).map(report => `<article class="mini-card"><strong>${escapeHtml(report.report_type)}</strong><span>${escapeHtml(report.status)} &middot; ${escapeHtml(report.evidence_quality)}</span><p>${escapeHtml(report.notes)}</p></article>`),
+          ...localCampaigns.map(campaign => `<article class="mini-card clickable-card profile-campaign-card" role="button" tabindex="0" data-campaign="${campaign.id}"><strong>${escapeHtml(campaign.name)}</strong><span>${escapeHtml(campaign.form_type)} &middot; ${escapeHtml(campaign.status)}</span><p>${campaign.offline_enabled ? 'Offline-ready' : 'Online only'} &middot; ${escapeHtml(campaign.language_mode)}</p></article>`),
+          ...localReports.slice(0, 4).map(report => `<article class="mini-card clickable-card profile-report-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(report))}"><strong>${escapeHtml(report.report_type)}</strong><span>${escapeHtml(report.status)} &middot; ${escapeHtml(report.evidence_quality)}</span><p>${escapeHtml(report.notes)}</p></article>`),
         ].join('') || '<div class="empty-state">No campaign or field report yet.</div>'}</div>
       </section>
       <section class="surface nested-surface">
         <div class="surface-header"><div><p class="eyebrow">Execution</p><h2>Alerts and tickets</h2></div><span class="status-pill">${localAlerts.length + localTickets.length}</span></div>
         <div class="list-stack">${[
-          ...localAlerts.map(alert => `<article class="mini-card severity-${escapeHtml(alert.severity)}"><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span><p>${escapeHtml(alert.message)}</p></article>`),
-          ...localTickets.map(ticket => `<article class="mini-card priority-${escapeHtml(ticket.priority)}"><strong>${escapeHtml(ticket.title)}</strong><span>${escapeHtml(ticket.priority)} &middot; ${escapeHtml(ticket.status)}</span><p>${escapeHtml(ticket.assigned_to || 'Unassigned')} &middot; Due ${escapeHtml(ticket.due_date || 'not set')}</p></article>`),
+          ...localAlerts.map(alert => `<article class="mini-card clickable-card profile-alert-card severity-${escapeHtml(alert.severity)}" role="button" tabindex="0" data-id="${alert.id}"><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span><p>${escapeHtml(alert.message)}</p></article>`),
+          ...localTickets.map(ticket => `<article class="mini-card clickable-card profile-ticket-card priority-${escapeHtml(ticket.priority)}" role="button" tabindex="0" data-id="${ticket.id}"><strong>${escapeHtml(ticket.title)}</strong><span>${escapeHtml(ticket.priority)} &middot; ${escapeHtml(ticket.status)}</span><p>${escapeHtml(ticket.assigned_to || 'Unassigned')} &middot; Due ${escapeHtml(ticket.due_date || 'not set')}</p></article>`),
         ].join('') || '<div class="empty-state">No open execution work.</div>'}</div>
       </section>
     </div>
@@ -801,6 +899,84 @@ function renderAreaProfile(area = selectedArea) {
     button.addEventListener('click', () => {
       const asset = assets.find(item => item.id === Number(button.dataset.id));
       if (asset) prepareAssetAction(button.dataset.action, asset);
+    });
+  });
+  document.querySelectorAll('.profile-site-card').forEach(card => {
+    const open = () => openSiteFollowUp(card.dataset.site);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  document.querySelectorAll('.profile-asset-card').forEach(card => {
+    const open = () => {
+      const asset = assets.find(item => item.id === Number(card.dataset.id));
+      if (asset) prepareAssetAction('profile', asset);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  document.querySelectorAll('.profile-campaign-card').forEach(card => {
+    const open = () => openCampaignFollowUp(card.dataset.campaign);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  document.querySelectorAll('.profile-report-card').forEach(card => {
+    const open = () => {
+      const reportArea = allStats.find(item => areaKey(item) === card.dataset.key);
+      openAreaFollowUp(reportArea);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  document.querySelectorAll('.profile-alert-card').forEach(card => {
+    const open = () => openAlertFollowUp(card.dataset.id);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  document.querySelectorAll('.profile-ticket-card').forEach(card => {
+    const open = () => openTicketFollowUp(card.dataset.id);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
     });
   });
   if (window.lucide) lucide.createIcons();
@@ -838,7 +1014,7 @@ function renderWorkspaces() {
       { label: 'Decision records', value: health.decision_snapshots, detail: `${health.active_tickets} active tickets`, tone: 'red' },
     ];
     healthTarget.innerHTML = cards.slice(0, 6).map((card, index) => `
-      <div class="metric-tile accent-${card.tone === 'bronze' ? 'bronze' : card.tone === 'green' ? 'green' : card.tone === 'gold' ? 'gold' : 'red'} ${index === 0 ? 'featured-metric' : ''}">
+      <div class="metric-tile clickable-card workspace-health-card accent-${card.tone === 'bronze' ? 'bronze' : card.tone === 'green' ? 'green' : card.tone === 'gold' ? 'gold' : 'red'} ${index === 0 ? 'featured-metric' : ''}" role="button" tabindex="0" data-jump="${index === 0 ? 'projects-list' : index === 1 ? 'sites-list' : index === 2 ? 'campaigns-list' : 'decision-snapshots-list'}">
         <span>${escapeHtml(card.label)}</span>
         <strong>${escapeHtml(card.value)}</strong>
         <small>${escapeHtml(card.detail)}</small>
@@ -860,7 +1036,7 @@ function renderWorkspaces() {
   document.getElementById('organizations-list').innerHTML = organizationRows.length ? organizationRows.map(item => {
     const organization = item.organization;
     return `
-    <article class="list-card status-online">
+    <article class="list-card clickable-card workspace-organization-card status-online" role="button" tabindex="0" data-search="${escapeHtml(organization.name)}">
       <div>
         <strong>${escapeHtml(organization.name)}</strong>
         <span>${escapeHtml(labelize(organization.org_type))} &middot; ${escapeHtml(organization.contact_name || 'No contact')}</span>
@@ -882,7 +1058,7 @@ function renderWorkspaces() {
   document.getElementById('projects-list').innerHTML = projectRows.length ? projectRows.map(item => {
     const project = item.project;
     return `
-    <article class="list-card status-${escapeHtml(project.status)}">
+    <article class="list-card clickable-card workspace-project-card status-${escapeHtml(project.status)}" role="button" tabindex="0" data-search="${escapeHtml(project.name)}">
       <div>
         <strong>${escapeHtml(project.name)}</strong>
         <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(labelize(project.sector))}</span>
@@ -909,7 +1085,7 @@ function renderWorkspaces() {
         + (projectDecisions.length ? 20 : 0)
         + (projectTickets.length === 0 ? 12 : 6));
       return `
-        <article class="list-card">
+        <article class="list-card clickable-card workspace-project-card" role="button" tabindex="0" data-search="${escapeHtml(project.name)}">
           <div>
             <strong>${escapeHtml(project.name)}</strong>
             <span>${escapeHtml(project.organization_name || 'No organization')} &middot; ${escapeHtml(project.region || 'National')}</span>
@@ -952,7 +1128,7 @@ function renderWorkspaces() {
   document.getElementById('sites-list').innerHTML = siteRows.length ? siteRows.map(item => {
     const site = item.site;
     return `
-    <article class="list-card">
+    <article class="list-card clickable-card workspace-site-card" role="button" tabindex="0" data-site="${site.id}">
       <div>
         <strong>${escapeHtml(site.name)}</strong>
         <span>${escapeHtml(labelize(site.site_type))} &middot; ${escapeHtml(site.commune)}, ${escapeHtml(site.department)}</span>
@@ -976,7 +1152,7 @@ function renderWorkspaces() {
   document.getElementById('campaigns-list').innerHTML = campaignRows.length ? campaignRows.map(item => {
     const campaign = item.campaign;
     return `
-    <article class="list-card status-${escapeHtml(campaign.status)}">
+    <article class="list-card clickable-card workspace-campaign-card status-${escapeHtml(campaign.status)}" role="button" tabindex="0" data-campaign="${campaign.id}">
       <div>
         <strong>${escapeHtml(campaign.name)}</strong>
         <span>${escapeHtml(labelize(campaign.form_type))} &middot; ${escapeHtml(campaign.target_commune || campaign.target_region || 'National')}</span>
@@ -995,7 +1171,7 @@ function renderWorkspaces() {
   }).join('') : '<div class="empty-state">No survey campaigns yet.</div>';
 
   document.getElementById('decision-snapshots-list').innerHTML = decisionSnapshots.length ? decisionSnapshots.map(decision => `
-    <article class="list-card priority-${Number(decision.priority_score) >= 70 ? 'high' : Number(decision.priority_score) >= 45 ? 'medium' : 'watch'}">
+    <article class="list-card clickable-card workspace-decision-card priority-${Number(decision.priority_score) >= 70 ? 'high' : Number(decision.priority_score) >= 45 ? 'medium' : 'watch'}" role="button" tabindex="0" data-decision="${decision.id}">
       <div>
         <strong>${escapeHtml(decision.title)}</strong>
         <span>${escapeHtml(decision.project_name || 'No project')} &middot; ${escapeHtml(decision.decision_stage)}</span>
@@ -1021,6 +1197,74 @@ function renderWorkspaces() {
   }
 
   if (window.lucide) lucide.createIcons();
+
+  document.querySelectorAll('.workspace-health-card').forEach(card => {
+    const open = () => document.getElementById(card.dataset.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+
+  document.querySelectorAll('.workspace-organization-card, .workspace-project-card').forEach(card => {
+    const open = () => focusWorkspaceList(card.dataset.search);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+
+  document.querySelectorAll('.workspace-site-card').forEach(card => {
+    const open = () => openSiteFollowUp(card.dataset.site);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+
+  document.querySelectorAll('.workspace-campaign-card').forEach(card => {
+    const open = () => openCampaignFollowUp(card.dataset.campaign);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+
+  document.querySelectorAll('.workspace-decision-card').forEach(card => {
+    const open = () => {
+      const decision = decisionSnapshots.find(item => item.id === Number(card.dataset.decision));
+      openDecisionFollowUp(decision);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 
   document.querySelectorAll('.project-action').forEach(button => {
     button.addEventListener('click', () => {
@@ -1450,7 +1694,7 @@ function renderAssets() {
     const context = assetContext(asset);
     const health = context.health;
     return `
-      <article class="probe-card status-${escapeHtml(asset.status)}">
+      <article class="probe-card clickable-card asset-card status-${escapeHtml(asset.status)}" role="button" tabindex="0" data-id="${asset.id}">
         <div>
           <p class="eyebrow">${escapeHtml(asset.asset_type.replaceAll('_', ' '))}</p>
           <strong>${escapeHtml(asset.name)}</strong>
@@ -1487,6 +1731,21 @@ function renderAssets() {
     button.addEventListener('click', () => {
       const asset = assets.find(item => item.id === Number(button.dataset.id));
       if (asset) prepareAssetAction(button.dataset.action, asset);
+    });
+  });
+  document.querySelectorAll('.asset-card').forEach(card => {
+    const open = () => {
+      const asset = assets.find(item => item.id === Number(card.dataset.id));
+      if (asset) prepareAssetAction('profile', asset);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
     });
   });
   document.querySelectorAll('.asset-status-action').forEach(button => {
@@ -1548,7 +1807,7 @@ function renderReports() {
 
 function renderAlerts() {
   document.getElementById('alerts-list').innerHTML = alerts.map(alert => `
-    <article class="list-card severity-${escapeHtml(alert.severity)}">
+    <article class="list-card clickable-card alert-card severity-${escapeHtml(alert.severity)}" role="button" tabindex="0" data-id="${alert.id}">
       <div><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span></div>
       <div class="ticket-actions">
         ${alert.status === 'open' ? `<button class="btn btn-sm btn-outline-secondary alert-status-action" data-id="${alert.id}" data-status="acknowledged">Acknowledge</button>` : ''}
@@ -1570,6 +1829,19 @@ function renderAlerts() {
       document.getElementById('ticketPriority').value = alert.severity === 'critical' ? 'urgent' : 'high';
       document.getElementById('ticketAssignedTo').value = 'Coverage response team';
       document.getElementById('ticketTitle').focus();
+    });
+  });
+
+  document.querySelectorAll('.alert-card').forEach(card => {
+    const open = () => openAlertFollowUp(card.dataset.id);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
     });
   });
 
@@ -1636,7 +1908,7 @@ function renderOverviewAlerts() {
   `).join('') : '<div class="empty-state">No open alerts.</div>';
 
   document.querySelectorAll('.overview-alert-card').forEach(card => {
-    const open = () => switchView('alerts');
+    const open = () => openAlertFollowUp(card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1706,7 +1978,7 @@ function executionPlanStatusActions(plan) {
 
 function renderTickets() {
   document.getElementById('tickets-list').innerHTML = tickets.map(ticket => `
-    <article class="list-card priority-${escapeHtml(ticket.priority)}">
+    <article class="list-card clickable-card ticket-card priority-${escapeHtml(ticket.priority)}" role="button" tabindex="0" data-id="${ticket.id}">
       <div>
         <strong>${escapeHtml(ticket.title)}</strong>
         <span>Ticket #${ticket.id} &middot; ${escapeHtml(ticket.status)} &middot; ${escapeHtml(ticket.assigned_to || 'Unassigned')}</span>
@@ -1735,6 +2007,18 @@ function renderTickets() {
       await refreshOverviewLayer();
     });
   });
+  document.querySelectorAll('.ticket-card').forEach(card => {
+    const open = () => openTicketFollowUp(card.dataset.id);
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 
   renderOverviewTickets();
 }
@@ -1755,7 +2039,7 @@ function renderOverviewTickets() {
   `).join('') : '<div class="empty-state">No active tickets.</div>';
 
   document.querySelectorAll('.overview-ticket-card').forEach(card => {
-    const open = () => switchView('tickets');
+    const open = () => openTicketFollowUp(card.dataset.id);
     card.addEventListener('click', event => {
       if (!cardClickGuard(event)) open();
     });
@@ -1966,6 +2250,21 @@ function renderDecisionBoard() {
       await refreshOverviewLayer();
     });
   });
+  document.querySelectorAll('.decision-card-link').forEach(card => {
+    const open = () => {
+      const decision = decisionBoard.decisions.find(item => item.id === Number(card.dataset.id));
+      openDecisionFollowUp(decision);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
   if (window.lucide) lucide.createIcons();
 }
 
@@ -1973,7 +2272,7 @@ function renderDecisionCard(decision) {
   const evidence = Number(decision.evidence_score || 0);
   const risk = decision.risk_level || 'medium';
   return `
-    <article class="decision-card priority-${escapeHtml(risk === 'high' ? 'high' : risk === 'low' ? 'watch' : 'medium')}">
+    <article class="decision-card clickable-card decision-card-link priority-${escapeHtml(risk === 'high' ? 'high' : risk === 'low' ? 'watch' : 'medium')}" role="button" tabindex="0" data-id="${decision.id}">
       <div>
         <strong>${escapeHtml(decision.title)}</strong>
         <span>${escapeHtml(decision.project_name || 'No project')} &middot; ${escapeHtml(decision.site_name || decision.asset_name || 'No proof link')}</span>
@@ -2061,6 +2360,21 @@ function renderExecutionBoard() {
       renderExecutionBoard();
     });
   });
+  document.querySelectorAll('.execution-plan-card-link').forEach(card => {
+    const open = () => {
+      const plan = executionBoard.plans.find(item => item.id === Number(card.dataset.id));
+      openDecisionFollowUp(plan);
+    };
+    card.addEventListener('click', event => {
+      if (!cardClickGuard(event)) open();
+    });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
   if (window.lucide) lucide.createIcons();
 }
 
@@ -2078,7 +2392,7 @@ function planChecklistCompletion(plan) {
 function renderExecutionPlanCard(plan) {
   const completion = planChecklistCompletion(plan);
   return `
-    <article class="decision-card priority-${plan.status === 'blocked' ? 'high' : plan.status === 'completed' ? 'watch' : 'medium'}">
+    <article class="decision-card clickable-card execution-plan-card-link priority-${plan.status === 'blocked' ? 'high' : plan.status === 'completed' ? 'watch' : 'medium'}" role="button" tabindex="0" data-id="${plan.id}">
       <div>
         <strong>${escapeHtml(plan.title)}</strong>
         <span>${escapeHtml(plan.project_name || 'No project')} &middot; ${escapeHtml(plan.site_name || plan.asset_name || plan.decision_title || 'No linked proof')}</span>

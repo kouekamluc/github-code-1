@@ -20,17 +20,18 @@
 
       <p class="nav-label">Workspaces</p>
       <nav class="tabbar">
-        <button class="tab-button active" data-view="overview"><i data-lucide="layout-dashboard"></i> Overview</button>
-        <button class="tab-button" data-view="workspaces"><i data-lucide="building-2"></i> Workspaces</button>
-        <button class="tab-button" data-view="areas"><i data-lucide="table-2"></i> Phone Matrix</button>
-        <button class="tab-button" data-view="profile"><i data-lucide="map-pin"></i> Area Profile</button>
-        <button class="tab-button" data-view="assets"><i data-lucide="radio-tower"></i> Signal Probes</button>
-        <button class="tab-button" data-view="reports"><i data-lucide="clipboard-check"></i> GPS Surveys</button>
-        <button class="tab-button" data-view="alerts"><i data-lucide="triangle-alert"></i> Coverage Alerts</button>
-        <button class="tab-button" data-view="tickets"><i data-lucide="wrench"></i> Maintenance</button>
-        <button class="tab-button" data-view="priority"><i data-lucide="target"></i> Priority Zones</button>
-        <button class="tab-button" data-view="iot"><i data-lucide="activity"></i> Telemetry</button>
-        <button class="tab-button" data-view="decision"><i data-lucide="file-chart-column"></i> Decision Report</button>
+        <button class="tab-button active" data-view="overview" data-nav-scope="public"><i data-lucide="layout-dashboard"></i> Overview</button>
+        <button class="tab-button" data-view="areas" data-nav-scope="public"><i data-lucide="table-2"></i> Phone Matrix</button>
+        <button class="tab-button" data-view="priority" data-nav-scope="public"><i data-lucide="target"></i> Priority Zones</button>
+        <button class="tab-button" data-view="login" data-nav-scope="guest"><i data-lucide="log-in"></i> Sign in</button>
+        <button class="tab-button" data-view="workspaces" data-nav-scope="auth"><i data-lucide="building-2"></i> Workspaces</button>
+        <button class="tab-button" data-view="profile" data-nav-scope="auth"><i data-lucide="map-pin"></i> Area Profile</button>
+        <button class="tab-button" data-view="assets" data-nav-scope="auth"><i data-lucide="radio-tower"></i> Signal Probes</button>
+        <button class="tab-button" data-view="reports" data-nav-scope="auth"><i data-lucide="clipboard-check"></i> GPS Surveys</button>
+        <button class="tab-button" data-view="alerts" data-nav-scope="auth"><i data-lucide="triangle-alert"></i> Coverage Alerts</button>
+        <button class="tab-button" data-view="tickets" data-nav-scope="auth"><i data-lucide="wrench"></i> Maintenance</button>
+        <button class="tab-button" data-view="iot" data-nav-scope="auth"><i data-lucide="activity"></i> Telemetry</button>
+        <button class="tab-button" data-view="decision" data-nav-scope="auth"><i data-lucide="file-chart-column"></i> Decision Report</button>
       </nav>
 
       <div class="sidebar-note">
@@ -47,10 +48,43 @@
           <p>Built for Cameroon's mobile-first market: fast scanning, local administrative names, confidence cues, and operational proof before action.</p>
         </div>
         <div class="header-actions">
+          <div id="auth-status" aria-live="polite"></div>
           <div id="data-status" aria-live="polite"></div>
           <button class="btn btn-primary" id="refresh-button"><i data-lucide="refresh-cw"></i> Refresh data</button>
         </div>
       </header>
+
+      <section class="view-section" id="view-login">
+        <div class="editor-grid">
+          <section class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Secure console</p>
+                <h2>Sign in</h2>
+              </div>
+            </div>
+            <form id="login-form" novalidate>
+              <input class="form-control mb-2" id="loginIdentifier" placeholder="Username or email" autocomplete="username" required />
+              <input type="password" class="form-control mb-2" id="loginPassword" placeholder="Password" autocomplete="current-password" required />
+              <button class="btn btn-primary w-100"><i data-lucide="log-in"></i> Sign in</button>
+              <div id="login-status" class="mt-3"></div>
+            </form>
+          </section>
+          <section class="surface dark-surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Why teams enter</p>
+                <h2>From evidence to execution</h2>
+              </div>
+            </div>
+            <div class="compact-stack">
+              <article class="compact-card"><strong>Board-ready decisions</strong><span>Turn priority zones into approved actions with evidence, owner, budget, and risk controls.</span></article>
+              <article class="compact-card"><strong>Field proof</strong><span>Link GPS surveys, site profiles, alerts, tickets, and telemetry before spending.</span></article>
+              <article class="compact-card"><strong>Operational accountability</strong><span>Every sensitive workflow movement is tied to an actor and audit event.</span></article>
+            </div>
+          </section>
+        </div>
+      </section>
 
       <section class="view-section active" id="view-overview">
         <div class="market-strip" aria-label="Cameroon market design principles">
@@ -793,6 +827,53 @@
               <a class="btn btn-outline-secondary btn-sm" href="/api/export/assets.csv"><i data-lucide="file-down"></i> Assets CSV</a>
             </div>
             <div id="iot-list" class="list-stack"></div>
+          </div>
+        </div>
+
+        <div class="summary-grid mt-4" id="imei-compliance-health"></div>
+        <div class="editor-grid mt-4">
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Operator API intake</p>
+                <h2>Log IMEI compliance event</h2>
+              </div>
+            </div>
+            <form id="imei-event-form" novalidate>
+              <input class="form-control mb-2" id="imeiOperator" placeholder="Operator or ISP name" required />
+              <input class="form-control mb-2" id="imeiValue" placeholder="IMEI from operator API" />
+              <input class="form-control mb-2" id="imeiHash" placeholder="IMEI hash if raw IMEI is not shared" />
+              <select class="form-select mb-2" id="imeiEventType">
+                <option value="activation">Activation</option>
+                <option value="verification">Verification</option>
+                <option value="allowed">Allowed</option>
+                <option value="blocked">Blocked</option>
+                <option value="customs_cleared">Customs cleared</option>
+                <option value="customs_pending">Customs pending</option>
+              </select>
+              <select class="form-select mb-2" id="imeiComplianceStatus">
+                <option value="cleared">Cleared</option>
+                <option value="pending">Pending</option>
+                <option value="blocked">Blocked</option>
+                <option value="unknown">Unknown</option>
+              </select>
+              <div class="row g-2 mb-2">
+                <div class="col"><input class="form-control" id="imeiRegion" placeholder="Region" /></div>
+                <div class="col"><input class="form-control" id="imeiCommune" placeholder="Arrondissement" /></div>
+              </div>
+              <input class="form-control mb-2" id="imeiReference" placeholder="Operator reference ID" />
+              <button class="btn btn-primary w-100"><i data-lucide="shield-check"></i> Save IMEI event</button>
+              <div id="imei-status" class="mt-3"></div>
+            </form>
+          </div>
+          <div class="surface">
+            <div class="surface-header">
+              <div>
+                <p class="eyebrow">Compliance feed</p>
+                <h2>Operator IMEI events</h2>
+              </div>
+            </div>
+            <div id="imei-events-list" class="list-stack"></div>
           </div>
         </div>
       </section>

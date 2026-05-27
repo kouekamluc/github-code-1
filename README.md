@@ -52,6 +52,9 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/cameroon_stats
 ## Endpoints
 
 - `GET /api/summary` - national totals and hierarchy counts
+- `GET /api/auth/context` - request actor, role, and first-pass permissions from headers
+- `GET /api/audit-events` - workflow audit trail, optionally filtered by entity type and id
+- `GET|POST /api/operator-imei-events` - operator/API IMEI compliance feed for Cameroon device-clearance events
 - `GET /api/overview` - Rust-computed business cockpit with KPIs, opportunity pipeline, trust risks, and next actions
 - `GET /api/stats` - detailed dataset by region/department/commune
 - `POST /api/stats/update` - insert or update a location record
@@ -73,6 +76,7 @@ The frontend is served from `static/index.html` and uses `static/app.js` to disp
 - Phone ownership and population metrics are calculated by a transparent matrix when measured local values are missing.
 - The matrix uses the OCHA GPS centroid and area, region-level weighting, proximity to major urban anchors, 2025 Cameroon population, and the 2024 World Bank mobile-subscription baseline.
 - Manual measured updates override matrix estimates for the matching administrative unit.
+- Operator IMEI events are stored as hashed device identifiers with optional last-four matching, supporting Cameroon customs/operator compliance workflows without storing subscriber identity.
 - Docker Desktop must be running before `docker compose up -d` will work on Windows.
 
 ## Production readiness checklist

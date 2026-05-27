@@ -52,6 +52,18 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id BIGSERIAL PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'operator',
+            password_hash TEXT NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+        r#"
         CREATE TABLE IF NOT EXISTS projects (
             id BIGSERIAL PRIMARY KEY,
             organization_id BIGINT REFERENCES organizations(id) ON DELETE SET NULL,
@@ -65,6 +77,17 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
             start_date DATE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE(organization_id, name)
+        )
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS workspace_memberships (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            organization_id BIGINT REFERENCES organizations(id) ON DELETE CASCADE,
+            project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(user_id, organization_id, project_id)
         )
         "#,
         r#"
@@ -244,6 +267,52 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS operator_imei_events (
+            id BIGSERIAL PRIMARY KEY,
+            operator_name TEXT NOT NULL,
+            imei_hash TEXT NOT NULL,
+            imei_last4 TEXT,
+            device_type TEXT,
+            event_type TEXT NOT NULL,
+            compliance_status TEXT NOT NULL,
+            region TEXT,
+            department TEXT,
+            commune TEXT,
+            source_system TEXT NOT NULL DEFAULT 'operator_api',
+            raw_reference TEXT,
+            network_first_seen_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT operator_imei_events_status_check CHECK (
+                compliance_status IN ('cleared', 'pending', 'blocked', 'unknown')
+            ),
+            CONSTRAINT operator_imei_events_type_check CHECK (
+                event_type IN ('activation', 'verification', 'blocked', 'allowed', 'customs_cleared', 'customs_pending')
+            )
+        )
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS audit_events (
+            id BIGSERIAL PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id BIGINT NOT NULL,
+            field_name TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            actor TEXT NOT NULL DEFAULT 'system',
+            note TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
     ];
 
     for statement in operational_schema {
@@ -295,11 +364,27 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         ADD COLUMN IF NOT EXISTS approval_notes TEXT,
         ADD COLUMN IF NOT EXISTS execution_status TEXT NOT NULL DEFAULT 'not_started'
         "#,
+        r#"
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS username TEXT,
+        ADD COLUMN IF NOT EXISTS password_hash TEXT,
+        ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE
+        "#,
     ];
 
     for statement in compatibility_schema {
         sqlx::query(statement).execute(pool).await?;
     }
+
+    sqlx::query(
+        r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique_idx
+        ON users(username)
+        WHERE username IS NOT NULL
+        "#,
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         r#"

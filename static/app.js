@@ -4,6 +4,7 @@ const summaryCards = document.getElementById('summary-cards');
 const tableBody = document.getElementById('regions-table-body');
 const refreshButton = document.getElementById('refresh-button');
 const dataStatus = document.getElementById('data-status');
+const authStatus = document.getElementById('auth-status');
 const regionFilter = document.getElementById('regionFilter');
 const departmentFilter = document.getElementById('departmentFilter');
 const communeFilter = document.getElementById('communeFilter');
@@ -49,9 +50,11 @@ let sites = [];
 let campaigns = [];
 let decisionSnapshots = [];
 let readings = [];
+let imeiCompliance = null;
 let priorityZones = [];
 let selectedArea = null;
 let currentMatrixRows = [];
+let authSession = JSON.parse(localStorage.getItem('kkEvoAuth') || 'null');
 
 const workspaceTemplates = [
   {
@@ -112,8 +115,21 @@ const workspaceTemplates = [
   },
 ];
 
+function authHeaders() {
+  if (!authSession?.token) return {};
+  return {
+    'x-kk-session': authSession.token,
+  };
+}
+
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...authHeaders(),
+      ...(options.headers || {}),
+    },
+  });
   const contentType = response.headers.get('content-type') || '';
   const body = contentType.includes('application/json') ? await response.json() : null;
   if (!response.ok) throw new Error(body?.message || `Request failed with status ${response.status}`);
@@ -362,6 +378,10 @@ function areaActionText(area, context) {
 }
 
 function switchView(view) {
+  const requested = document.querySelector(`.tab-button[data-view="${view}"]`);
+  if (requested?.dataset.navScope === 'auth' && !authSession?.token) {
+    view = 'login';
+  }
   document.querySelectorAll('.tab-button').forEach(button => {
     button.classList.toggle('active', button.dataset.view === view);
   });
@@ -369,6 +389,34 @@ function switchView(view) {
     section.classList.toggle('active', section.id === `view-${view}`);
   });
   if (view === 'overview' && map) setTimeout(() => map.invalidateSize(), 150);
+}
+
+function renderAuthState() {
+  const authenticated = Boolean(authSession?.token);
+  document.querySelectorAll('[data-nav-scope="auth"]').forEach(button => {
+    button.style.display = authenticated ? '' : 'none';
+  });
+  document.querySelectorAll('[data-nav-scope="guest"]').forEach(button => {
+    button.style.display = authenticated ? 'none' : '';
+  });
+  if (authStatus) {
+    authStatus.innerHTML = authenticated
+      ? `<div class="alert alert-success py-2 mb-0">Signed in as ${escapeHtml(authSession.display_name || authSession.actor)} · ${escapeHtml(authSession.role)} <button class="btn btn-sm btn-outline-secondary" id="logout-button">Sign out</button></div>`
+      : '<div class="alert alert-info py-2 mb-0">Public preview mode</div>';
+    document.getElementById('logout-button')?.addEventListener('click', () => {
+      authSession = null;
+      localStorage.removeItem('kkEvoAuth');
+      renderAuthState();
+      switchView('overview');
+    });
+  }
+  if (!authenticated) {
+    const active = document.querySelector('.view-section.active');
+    const activeView = active?.id?.replace('view-', '');
+    const activeButton = activeView ? document.querySelector(`.tab-button[data-view="${activeView}"]`) : null;
+    if (activeButton?.dataset.navScope === 'auth') switchView('overview');
+  }
+  if (window.lucide) lucide.createIcons();
 }
 
 function renderSummary(summary, overview = overviewIntelligence) {
@@ -814,7 +862,7 @@ function renderWorkspaces() {
       <div class="ticket-actions">
         <button class="btn btn-sm btn-outline-secondary campaign-action" data-action="reports" data-campaign="${campaign.id}">Reports</button>
         <button class="btn btn-sm btn-outline-secondary campaign-action" data-action="decision" data-campaign="${campaign.id}">Decision</button>
-        <button class="btn btn-sm btn-success campaign-action" data-action="completed" data-campaign="${campaign.id}">Complete</button>
+        ${campaignStatusActions(campaign)}
         <a class="btn btn-sm btn-outline-secondary" href="/api/export/phone-matrix.csv">Export</a>
       </div>
     </article>
@@ -901,16 +949,16 @@ function renderWorkspaces() {
         document.getElementById('decisionNextAction').value = 'Review submitted reports, confirm evidence quality, and approve the next field action.';
         document.getElementById('decisionTitle').focus();
       }
-      if (button.dataset.action === 'completed') {
+      if (button.dataset.action === 'status') {
         fetchJson(`/api/survey-campaigns/${campaign.id}/status`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'completed' }),
+          body: JSON.stringify({ status: button.dataset.status }),
         }).then(async data => {
           campaigns = data;
           workspaceDashboard = await fetchJson('/api/workspaces/dashboard');
           renderWorkspaces();
-          setStatus(document.getElementById('campaign-status'), `${campaign.name} marked completed.`, 'success');
+          setStatus(document.getElementById('campaign-status'), `${campaign.name} moved to ${button.dataset.status}.`, 'success');
         }).catch(error => setStatus(document.getElementById('campaign-status'), error.message, 'danger'));
       }
     });
@@ -1362,8 +1410,9 @@ function renderAlerts() {
     <article class="list-card severity-${escapeHtml(alert.severity)}">
       <div><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.severity)} &middot; ${escapeHtml(alert.status)}</span></div>
       <div class="ticket-actions">
+        ${alert.status === 'open' ? `<button class="btn btn-sm btn-outline-secondary alert-status-action" data-id="${alert.id}" data-status="acknowledged">Acknowledge</button>` : ''}
         <button class="btn btn-sm btn-outline-secondary alert-ticket-action" data-id="${alert.id}">Ticket</button>
-        <button class="btn btn-sm btn-outline-secondary resolve-alert" data-id="${alert.id}">Resolve</button>
+        ${alert.status !== 'resolved' ? `<button class="btn btn-sm btn-outline-secondary alert-status-action" data-id="${alert.id}" data-status="resolved">Resolve</button>` : ''}
       </div>
       <p>${escapeHtml(alert.message)}</p>
     </article>
@@ -1383,12 +1432,12 @@ function renderAlerts() {
     });
   });
 
-  document.querySelectorAll('.resolve-alert').forEach(button => {
+  document.querySelectorAll('.alert-status-action').forEach(button => {
     button.addEventListener('click', async () => {
       alerts = await fetchJson(`/api/alerts/${button.dataset.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'resolved' }),
+        body: JSON.stringify({ status: button.dataset.status }),
       });
       signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
       renderAlerts();
@@ -1430,6 +1479,61 @@ function renderOverviewAlerts() {
   `).join('') : '<div class="empty-state">No open alerts.</div>';
 }
 
+function campaignStatusActions(campaign) {
+  const next = {
+    draft: ['ready', 'Ready'],
+    ready: ['in_field', 'Start fieldwork'],
+    in_field: ['reviewing', 'Review'],
+    active: ['reviewing', 'Review'],
+    reviewing: ['completed', 'Complete'],
+    paused: ['ready', 'Resume'],
+  }[campaign.status];
+  return next
+    ? `<button class="btn btn-sm btn-success campaign-action" data-action="status" data-status="${next[0]}" data-campaign="${campaign.id}">${next[1]}</button>`
+    : '';
+}
+
+function ticketStatusActions(ticket) {
+  const actions = {
+    open: [['in_progress', 'Start', 'outline-secondary'], ['blocked', 'Block', 'outline-secondary']],
+    assigned: [['in_progress', 'Start', 'outline-secondary'], ['blocked', 'Block', 'outline-secondary']],
+    in_progress: [['blocked', 'Block', 'outline-secondary'], ['done', 'Done', 'success']],
+    blocked: [['in_progress', 'Resume', 'outline-secondary'], ['cancelled', 'Cancel', 'outline-secondary']],
+  }[ticket.status] || [];
+  return actions.map(([status, label, tone]) => (
+    `<button class="btn btn-sm btn-${tone} ticket-status-action" data-id="${ticket.id}" data-status="${status}">${label}</button>`
+  )).join('');
+}
+
+function decisionStageActions(decision) {
+  const stageActions = {
+    draft: [['recommended', 'Recommend', 'outline-secondary'], ['blocked', 'Block', 'outline-secondary']],
+    recommended: [['approved', 'Approve', 'outline-secondary'], ['blocked', 'Block', 'outline-secondary']],
+    approved: [['executing', 'Execute', 'outline-secondary'], ['blocked', 'Block', 'outline-secondary']],
+    executing: [['completed', 'Complete', 'success'], ['blocked', 'Block', 'outline-secondary']],
+    blocked: [['recommended', 'Reopen', 'outline-secondary']],
+  }[decision.decision_stage] || [];
+  const buttons = stageActions.map(([stage, label, tone]) => (
+    `<button class="btn btn-sm btn-${tone} decision-stage-action" data-id="${decision.id}" data-stage="${stage}">${label}</button>`
+  ));
+  if (decision.decision_stage === 'approved' && Number(decision.evidence_score || 0) >= 60) {
+    buttons.push(`<button class="btn btn-sm btn-outline-secondary decision-plan-action" data-id="${decision.id}"><i data-lucide="list-checks"></i> Plan</button>`);
+  }
+  return buttons.join('');
+}
+
+function executionPlanStatusActions(plan) {
+  const actions = {
+    planned: [['ready', 'Ready', 'outline-secondary'], ['blocked', 'Block', 'outline-secondary']],
+    ready: [['in_progress', 'Start', 'outline-secondary'], ['blocked', 'Block', 'outline-secondary']],
+    in_progress: [['blocked', 'Block', 'outline-secondary'], ['completed', 'Complete', 'success']],
+    blocked: [['ready', 'Ready', 'outline-secondary'], ['in_progress', 'Resume', 'outline-secondary']],
+  }[plan.status] || [];
+  return actions.map(([status, label, tone]) => (
+    `<button class="btn btn-sm btn-${tone} execution-status-action" data-id="${plan.id}" data-status="${status}">${label}</button>`
+  )).join('');
+}
+
 function renderTickets() {
   document.getElementById('tickets-list').innerHTML = tickets.map(ticket => `
     <article class="list-card priority-${escapeHtml(ticket.priority)}">
@@ -1438,9 +1542,7 @@ function renderTickets() {
         <span>Ticket #${ticket.id} &middot; ${escapeHtml(ticket.status)} &middot; ${escapeHtml(ticket.assigned_to || 'Unassigned')}</span>
       </div>
       <div class="ticket-actions">
-        <button class="btn btn-sm btn-outline-secondary ticket-status-action" data-id="${ticket.id}" data-status="in_progress">Start</button>
-        <button class="btn btn-sm btn-outline-secondary ticket-status-action" data-id="${ticket.id}" data-status="blocked">Block</button>
-        <button class="btn btn-sm btn-success ticket-status-action" data-id="${ticket.id}" data-status="done">Done</button>
+        ${ticketStatusActions(ticket)}
       </div>
       <p>Priority ${escapeHtml(ticket.priority)} &middot; Asset ${escapeHtml(ticket.asset_id || 'n/a')} &middot; Alert ${escapeHtml(ticket.alert_id || 'n/a')} &middot; Due ${escapeHtml(ticket.due_date || 'not set')}</p>
     </article>
@@ -1505,6 +1607,36 @@ function renderIot() {
       <span class="status-pill">${Number(reading.value).toLocaleString()} ${escapeHtml(reading.unit)}</span>
     </article>
   `).join('');
+  renderImeiCompliance();
+}
+
+function renderImeiCompliance() {
+  const healthTarget = document.getElementById('imei-compliance-health');
+  const listTarget = document.getElementById('imei-events-list');
+  if (!healthTarget || !listTarget) return;
+  if (!imeiCompliance) {
+    healthTarget.innerHTML = '';
+    listTarget.innerHTML = '<div class="empty-state">Sign in to load operator IMEI compliance events.</div>';
+    return;
+  }
+  healthTarget.innerHTML = `
+    <div class="metric-tile accent-bronze featured-metric"><span>Operator events</span><strong>${imeiCompliance.total_events}</strong><small>${imeiCompliance.distinct_devices} distinct devices in the compliance feed</small></div>
+    <div class="metric-tile accent-green"><span>Cleared</span><strong>${imeiCompliance.cleared_events}</strong><small>Allowed or customs-cleared device signals</small></div>
+    <div class="metric-tile accent-gold"><span>Pending</span><strong>${imeiCompliance.pending_events}</strong><small>Require customs or operator verification</small></div>
+    <div class="metric-tile accent-red"><span>Blocked/unknown</span><strong>${imeiCompliance.blocked_events + imeiCompliance.unknown_events}</strong><small>${(imeiCompliance.operators || []).join(', ') || 'No operator feed yet'}</small></div>
+  `;
+  listTarget.innerHTML = imeiCompliance.latest_events?.length ? imeiCompliance.latest_events.map(event => `
+    <article class="list-card priority-${event.compliance_status === 'blocked' ? 'urgent' : event.compliance_status === 'pending' ? 'medium' : 'watch'}">
+      <div>
+        <strong>${escapeHtml(event.operator_name)} &middot; ${escapeHtml(event.event_type)}</strong>
+        <span>IMEI *${escapeHtml(event.imei_last4 || 'hash')} &middot; ${escapeHtml(event.region || 'Cameroon')}${event.commune ? ` / ${escapeHtml(event.commune)}` : ''}</span>
+      </div>
+      <span class="status-pill">${escapeHtml(event.compliance_status)}</span>
+      <p>${escapeHtml(event.source_system)} &middot; ${escapeHtml(event.raw_reference || 'no reference')} &middot; ${escapeHtml(event.created_at)}</p>
+    </article>
+  `).join('') : `
+    <div class="empty-state">${escapeHtml(imeiCompliance.regulatory_note)}</div>
+  `;
 }
 
 function renderDecision(report) {
@@ -1626,12 +1758,7 @@ function renderDecisionCard(decision) {
         <div><span>Owner</span><strong>${escapeHtml(decision.owner_name || 'Unset')}</strong></div>
       </div>
       <div class="ticket-actions">
-        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="recommended">Recommend</button>
-        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="approved">Approve</button>
-        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="executing">Execute</button>
-        <button class="btn btn-sm btn-success decision-stage-action" data-id="${decision.id}" data-stage="completed">Complete</button>
-        <button class="btn btn-sm btn-outline-secondary decision-stage-action" data-id="${decision.id}" data-stage="blocked">Block</button>
-        <button class="btn btn-sm btn-outline-secondary decision-plan-action" data-id="${decision.id}"><i data-lucide="list-checks"></i> Plan</button>
+        ${decisionStageActions(decision)}
       </div>
     </article>
   `;
@@ -1736,10 +1863,7 @@ function renderExecutionPlanCard(plan) {
         <div><span>Dates</span><strong>${escapeHtml(plan.planned_start || 'TBD')}</strong></div>
       </div>
       <div class="ticket-actions">
-        <button class="btn btn-sm btn-outline-secondary execution-status-action" data-id="${plan.id}" data-status="ready">Ready</button>
-        <button class="btn btn-sm btn-outline-secondary execution-status-action" data-id="${plan.id}" data-status="in_progress">Start</button>
-        <button class="btn btn-sm btn-outline-secondary execution-status-action" data-id="${plan.id}" data-status="blocked">Block</button>
-        <button class="btn btn-sm btn-success execution-status-action" data-id="${plan.id}" data-status="completed">Complete</button>
+        ${executionPlanStatusActions(plan)}
       </div>
     </article>
   `;
@@ -2011,7 +2135,7 @@ async function refreshData() {
   refreshButton.disabled = true;
   setStatus(dataStatus, 'Loading KK Evo intelligence layers...', 'info');
   try {
-    const [summary, overviewData, phoneMatrixData, workspaceData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, priorityData, decisionData] = await Promise.all([
+    const [summary, overviewData, phoneMatrixData, workspaceData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, imeiData, priorityData, decisionData] = await Promise.all([
       fetchJson('/api/summary'),
       fetchJson('/api/overview'),
       fetchJson('/api/phone-matrix'),
@@ -2029,6 +2153,7 @@ async function refreshData() {
       fetchJson('/api/alerts'),
       fetchJson('/api/tickets'),
       fetchJson('/api/iot/readings'),
+      authSession?.token ? fetchJson('/api/operator-imei-events') : Promise.resolve(null),
       fetchJson('/api/priority-zones'),
       fetchJson('/api/decision-report'),
     ]);
@@ -2050,6 +2175,7 @@ async function refreshData() {
     alerts = alertData;
     tickets = ticketData;
     readings = readingData;
+    imeiCompliance = imeiData;
     priorityZones = priorityData;
     renderSummary(summary, overviewData);
     renderOverviewIntelligence();
@@ -2318,8 +2444,10 @@ document.getElementById('ticket-form').addEventListener('submit', async event =>
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    alerts = await fetchJson('/api/alerts');
     signalProbeDashboard = await fetchJson('/api/signal-probes/dashboard');
     renderTickets();
+    renderAlerts();
     renderAssets();
     await refreshOverviewLayer();
     setStatus(document.getElementById('ticket-status'), 'Ticket created.', 'success');
@@ -2366,11 +2494,62 @@ document.getElementById('iot-form').addEventListener('submit', async event => {
   }
 });
 
+document.getElementById('imei-event-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const payload = {
+    operator_name: document.getElementById('imeiOperator').value.trim(),
+    imei: document.getElementById('imeiValue').value.trim() || null,
+    imei_hash: document.getElementById('imeiHash').value.trim() || null,
+    event_type: document.getElementById('imeiEventType').value,
+    compliance_status: document.getElementById('imeiComplianceStatus').value,
+    region: document.getElementById('imeiRegion').value.trim() || null,
+    commune: document.getElementById('imeiCommune').value.trim() || null,
+    source_system: 'operator_api',
+    raw_reference: document.getElementById('imeiReference').value.trim() || null,
+  };
+  try {
+    imeiCompliance = await fetchJson('/api/operator-imei-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    renderImeiCompliance();
+    setStatus(document.getElementById('imei-status'), 'IMEI compliance event saved.', 'success');
+    event.target.reset();
+  } catch (error) {
+    setStatus(document.getElementById('imei-status'), error.message, 'danger');
+  }
+});
+
+document.getElementById('login-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    const response = await fetchJson('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        login: document.getElementById('loginIdentifier').value.trim(),
+        password: document.getElementById('loginPassword').value,
+      }),
+    });
+    authSession = response;
+    localStorage.setItem('kkEvoAuth', JSON.stringify(response));
+    renderAuthState();
+    setStatus(document.getElementById('login-status'), 'Signed in. Operational console unlocked.', 'success');
+    event.target.reset();
+    await refreshData();
+    switchView('workspaces');
+  } catch (error) {
+    setStatus(document.getElementById('login-status'), error.message, 'danger');
+  }
+});
+
 document.querySelectorAll('.tab-button').forEach(button => {
   button.addEventListener('click', () => switchView(button.dataset.view));
 });
 
 if (window.lucide) lucide.createIcons();
+renderAuthState();
 refreshButton.addEventListener('click', refreshData);
 regionFilter.addEventListener('change', () => { buildFilterOptions(); updateView(); });
 departmentFilter.addEventListener('change', () => { buildFilterOptions(); updateView(); });
@@ -2397,4 +2576,4 @@ document.getElementById('iotReadingType')?.addEventListener('change', event => {
   unit.value = ['uptime', 'battery_level', 'asset_health'].includes(event.target.value) ? 'percent' : 'score';
 });
 matrixExportButton?.addEventListener('click', exportCurrentMatrixCsv);
-window.addEventListener('load', () => { initMap(); refreshData(); });
+window.addEventListener('load', () => { initMap(); renderAuthState(); refreshData(); });

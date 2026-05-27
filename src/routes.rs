@@ -6,6 +6,9 @@ use crate::handlers::*;
 pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(summary)
         .service(overview)
+        .service(auth_context)
+        .service(login)
+        .service(list_audit_events)
         .service(list_stats)
         .service(phone_matrix)
         .service(phone_matrix_detail)
@@ -37,6 +40,8 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
         .service(update_ticket_status)
         .service(list_iot_readings)
         .service(create_iot_reading)
+        .service(imei_compliance_summary)
+        .service(ingest_imei_event)
         .service(priority_zones)
         .service(decision_report)
         .service(decision_board)

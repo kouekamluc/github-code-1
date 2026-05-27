@@ -43,6 +43,67 @@ pub(crate) struct ApiError {
 }
 
 #[derive(Serialize)]
+pub(crate) struct UserContext {
+    pub(crate) actor: String,
+    pub(crate) display_name: Option<String>,
+    pub(crate) role: String,
+    pub(crate) permissions: Vec<String>,
+    pub(crate) authenticated: bool,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct LoginRequest {
+    pub(crate) login: String,
+    pub(crate) password: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct LoginResponse {
+    pub(crate) token: String,
+    pub(crate) actor: String,
+    pub(crate) display_name: String,
+    pub(crate) role: String,
+    pub(crate) permissions: Vec<String>,
+}
+
+#[derive(FromRow)]
+pub(crate) struct AuthUser {
+    pub(crate) id: i64,
+    pub(crate) email: String,
+    pub(crate) display_name: String,
+    pub(crate) role: String,
+    pub(crate) password_hash: String,
+    pub(crate) is_active: bool,
+}
+
+#[derive(FromRow)]
+pub(crate) struct AuthSessionUser {
+    pub(crate) email: String,
+    pub(crate) display_name: String,
+    pub(crate) role: String,
+}
+
+#[derive(Serialize, FromRow)]
+pub(crate) struct AuditEvent {
+    pub(crate) id: i64,
+    pub(crate) entity_type: String,
+    pub(crate) entity_id: i64,
+    pub(crate) field_name: String,
+    pub(crate) old_value: Option<String>,
+    pub(crate) new_value: Option<String>,
+    pub(crate) actor: String,
+    pub(crate) note: Option<String>,
+    pub(crate) created_at: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct AuditEventQuery {
+    pub(crate) entity_type: Option<String>,
+    pub(crate) entity_id: Option<i64>,
+    pub(crate) limit: Option<i64>,
+}
+
+#[derive(Serialize)]
 pub(crate) struct Summary {
     pub(crate) total_phone_owners: i64,
     pub(crate) total_population: i64,
@@ -301,6 +362,53 @@ pub(crate) struct IotReadingRequest {
     pub(crate) unit: String,
     pub(crate) latitude: Option<f64>,
     pub(crate) longitude: Option<f64>,
+}
+
+#[derive(Serialize, FromRow, Clone)]
+pub(crate) struct OperatorImeiEvent {
+    pub(crate) id: i64,
+    pub(crate) operator_name: String,
+    pub(crate) imei_hash: String,
+    pub(crate) imei_last4: Option<String>,
+    pub(crate) device_type: Option<String>,
+    pub(crate) event_type: String,
+    pub(crate) compliance_status: String,
+    pub(crate) region: Option<String>,
+    pub(crate) department: Option<String>,
+    pub(crate) commune: Option<String>,
+    pub(crate) source_system: String,
+    pub(crate) raw_reference: Option<String>,
+    pub(crate) network_first_seen_at: Option<String>,
+    pub(crate) created_at: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct OperatorImeiEventRequest {
+    pub(crate) operator_name: String,
+    pub(crate) imei: Option<String>,
+    pub(crate) imei_hash: Option<String>,
+    pub(crate) device_type: Option<String>,
+    pub(crate) event_type: String,
+    pub(crate) compliance_status: String,
+    pub(crate) region: Option<String>,
+    pub(crate) department: Option<String>,
+    pub(crate) commune: Option<String>,
+    pub(crate) source_system: Option<String>,
+    pub(crate) raw_reference: Option<String>,
+    pub(crate) network_first_seen_at: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ImeiComplianceSummary {
+    pub(crate) total_events: i64,
+    pub(crate) cleared_events: i64,
+    pub(crate) pending_events: i64,
+    pub(crate) blocked_events: i64,
+    pub(crate) unknown_events: i64,
+    pub(crate) distinct_devices: i64,
+    pub(crate) operators: Vec<String>,
+    pub(crate) latest_events: Vec<OperatorImeiEvent>,
+    pub(crate) regulatory_note: String,
 }
 
 #[derive(Serialize, Clone)]

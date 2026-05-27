@@ -1,8 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
+use argon2::password_hash::rand_core::OsRng;
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::models::*;
+use crate::workflow::WorkflowKind;
 
 fn region_weight(region: &str) -> f64 {
     match region {
@@ -190,6 +198,286 @@ pub(crate) fn priority_label(score: f64) -> String {
 pub(crate) fn csv_escape(value: &str) -> String {
     let escaped = value.replace('"', "\"\"");
     format!("\"{}\"", escaped)
+}
+
+pub(crate) async fn fetch_workflow_value(
+    pool: &PgPool,
+    kind: WorkflowKind,
+    id: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    let query = match kind {
+        WorkflowKind::SurveyCampaign => "SELECT status FROM survey_campaigns WHERE id = $1",
+        WorkflowKind::Alert => "SELECT status FROM alerts WHERE id = $1",
+        WorkflowKind::MaintenanceTicket => "SELECT status FROM maintenance_tickets WHERE id = $1",
+        WorkflowKind::Decision => "SELECT decision_stage FROM decision_snapshots WHERE id = $1",
+        WorkflowKind::ExecutionPlan => "SELECT status FROM execution_plans WHERE id = $1",
+        WorkflowKind::Asset => "SELECT status FROM infrastructure_assets WHERE id = $1",
+    };
+
+    sqlx::query_as::<_, (String,)>(query)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map(|row| row.map(|value| value.0))
+}
+
+pub(crate) async fn record_audit_event(
+    pool: &PgPool,
+    kind: WorkflowKind,
+    entity_id: i64,
+    old_value: &str,
+    new_value: &str,
+    actor: &str,
+    note: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            entity_type, entity_id, field_name, old_value, new_value, actor, note
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind(kind.entity_type())
+    .bind(entity_id)
+    .bind(kind.field_name())
+    .bind(old_value)
+    .bind(new_value)
+    .bind(actor)
+    .bind(note)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub(crate) async fn fetch_audit_events(
+    pool: &PgPool,
+    query: &AuditEventQuery,
+) -> Result<Vec<AuditEvent>, sqlx::Error> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    sqlx::query_as::<_, AuditEvent>(
+        r#"
+        SELECT
+            id,
+            entity_type,
+            entity_id,
+            field_name,
+            old_value,
+            new_value,
+            actor,
+            note,
+            created_at::TEXT AS created_at
+        FROM audit_events
+        WHERE ($1::TEXT IS NULL OR entity_type = $1)
+          AND ($2::BIGINT IS NULL OR entity_id = $2)
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(&query.entity_type)
+    .bind(query.entity_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+}
+
+pub(crate) fn verify_password(password: &str, password_hash: &str) -> bool {
+    PasswordHash::new(password_hash)
+        .ok()
+        .and_then(|parsed| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .ok()
+        })
+        .is_some()
+}
+
+pub(crate) async fn login_user(
+    pool: &PgPool,
+    request: &LoginRequest,
+) -> Result<Option<LoginResponse>, sqlx::Error> {
+    let login = request.login.trim();
+    if login.is_empty() || request.password.is_empty() {
+        return Ok(None);
+    }
+
+    let user = sqlx::query_as::<_, AuthUser>(
+        r#"
+        SELECT
+            id,
+            email,
+            display_name,
+            role,
+            COALESCE(password_hash, '') AS password_hash,
+            is_active
+        FROM users
+        WHERE username = $1 OR email = $1
+        "#,
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(user) = user else {
+        return Ok(None);
+    };
+    if !user.is_active || !verify_password(&request.password, &user.password_hash) {
+        return Ok(None);
+    }
+
+    let token = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO auth_sessions (user_id, token, expires_at)
+        VALUES ($1, $2, NOW() + INTERVAL '7 days')
+        "#,
+    )
+    .bind(user.id)
+    .bind(&token)
+    .execute(pool)
+    .await?;
+
+    Ok(Some(LoginResponse {
+        token,
+        actor: user.email,
+        display_name: user.display_name,
+        role: user.role.clone(),
+        permissions: permissions_for_role(&user.role),
+    }))
+}
+
+pub(crate) async fn auth_context_from_token(
+    pool: &PgPool,
+    token: Option<&str>,
+) -> Result<UserContext, sqlx::Error> {
+    let Some(token) = token.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(public_context());
+    };
+
+    let user = sqlx::query_as::<_, AuthSessionUser>(
+        r#"
+        SELECT
+            u.email,
+            u.display_name,
+            u.role
+        FROM auth_sessions s
+        JOIN users u ON u.id = s.user_id
+        WHERE s.token = $1
+          AND s.expires_at > NOW()
+          AND u.is_active = TRUE
+        "#,
+    )
+    .bind(token)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user.map_or_else(public_context, |user| UserContext {
+        actor: user.email,
+        display_name: Some(user.display_name),
+        role: user.role.clone(),
+        permissions: permissions_for_role(&user.role),
+        authenticated: true,
+    }))
+}
+
+fn public_context() -> UserContext {
+    UserContext {
+        actor: "anonymous".into(),
+        display_name: None,
+        role: "public".into(),
+        permissions: permissions_for_role("public"),
+        authenticated: false,
+    }
+}
+
+pub(crate) fn permissions_for_role(role: &str) -> Vec<String> {
+    let permissions = match role {
+        "admin" | "platform_admin" => [
+            "workspace:manage",
+            "workflow:transition",
+            "decision:approve",
+            "execution:complete",
+            "audit:read",
+            "user:manage",
+            "data:write",
+            "field:submit",
+            "telemetry:write",
+        ]
+        .as_slice(),
+        "government_admin" | "organization_admin" => [
+            "workspace:manage",
+            "workflow:transition",
+            "decision:approve",
+            "execution:complete",
+            "audit:read",
+            "data:write",
+            "field:submit",
+            "telemetry:write",
+        ]
+        .as_slice(),
+        "manager" | "program_manager" => [
+            "workflow:transition",
+            "decision:approve",
+            "execution:complete",
+            "audit:read",
+            "data:write",
+            "field:submit",
+            "telemetry:write",
+        ]
+        .as_slice(),
+        "field_supervisor" => [
+            "workflow:transition",
+            "execution:complete",
+            "audit:read",
+            "data:write",
+            "field:submit",
+            "telemetry:write",
+        ]
+        .as_slice(),
+        "field_agent" => ["field:submit", "telemetry:write"].as_slice(),
+        "analyst" => ["audit:read"].as_slice(),
+        "viewer" | "public" => [].as_slice(),
+        _ => ["workflow:transition"].as_slice(),
+    };
+
+    permissions.iter().map(|value| (*value).into()).collect()
+}
+
+#[cfg(test)]
+pub(crate) fn role_has_permission(role: &str, permission: &str) -> bool {
+    permissions_for_role(role)
+        .iter()
+        .any(|value| value == permission)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::permissions_for_role;
+
+    #[test]
+    fn admin_role_has_audit_permission() {
+        let permissions = permissions_for_role("admin");
+        assert!(permissions.contains(&"audit:read".into()));
+        assert!(permissions.contains(&"workspace:manage".into()));
+    }
+
+    #[test]
+    fn unknown_role_keeps_operator_transition_permission() {
+        let permissions = permissions_for_role("unknown");
+        assert_eq!(permissions, vec!["workflow:transition".to_string()]);
+    }
+
+    #[test]
+    fn operator_cannot_approve_decisions() {
+        assert!(!super::role_has_permission("operator", "decision:approve"));
+    }
 }
 
 pub(crate) async fn fetch_location_stats(pool: &PgPool) -> Result<Vec<LocationStat>, sqlx::Error> {
@@ -778,6 +1066,148 @@ pub(crate) async fn fetch_iot_readings(pool: &PgPool) -> Result<Vec<IotReading>,
     )
     .fetch_all(pool)
     .await
+}
+
+pub(crate) fn imei_fingerprint(imei: &str) -> String {
+    let normalized = imei
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect::<String>();
+    let digest = Sha256::digest(normalized.as_bytes());
+    hex::encode(digest)
+}
+
+pub(crate) fn imei_last4(imei: &str) -> Option<String> {
+    let digits = imei
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect::<String>();
+    if digits.len() < 4 {
+        None
+    } else {
+        Some(digits[digits.len() - 4..].to_string())
+    }
+}
+
+pub(crate) fn validate_imei_event(payload: &OperatorImeiEventRequest) -> Result<(), String> {
+    validate_required(&payload.operator_name, "Operator name")?;
+    validate_required(&payload.event_type, "Event type")?;
+    validate_required(&payload.compliance_status, "Compliance status")?;
+    if !matches!(
+        payload.event_type.as_str(),
+        "activation"
+            | "verification"
+            | "blocked"
+            | "allowed"
+            | "customs_cleared"
+            | "customs_pending"
+    ) {
+        return Err("IMEI event type is not supported.".into());
+    }
+    if !matches!(
+        payload.compliance_status.as_str(),
+        "cleared" | "pending" | "blocked" | "unknown"
+    ) {
+        return Err("Compliance status must be cleared, pending, blocked, or unknown.".into());
+    }
+    if payload
+        .imei
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+        && payload
+            .imei_hash
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        return Err("Provide either an IMEI or an IMEI hash from the operator API.".into());
+    }
+    if let Some(imei) = payload.imei.as_deref() {
+        let digits = imei
+            .chars()
+            .filter(|character| character.is_ascii_digit())
+            .collect::<String>();
+        if !(14..=16).contains(&digits.len()) {
+            return Err("IMEI must contain 14 to 16 digits.".into());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn fetch_imei_events(
+    pool: &PgPool,
+) -> Result<Vec<OperatorImeiEvent>, sqlx::Error> {
+    sqlx::query_as::<_, OperatorImeiEvent>(
+        r#"
+        SELECT
+            id,
+            operator_name,
+            imei_hash,
+            imei_last4,
+            device_type,
+            event_type,
+            compliance_status,
+            region,
+            department,
+            commune,
+            source_system,
+            raw_reference,
+            network_first_seen_at::TEXT AS network_first_seen_at,
+            created_at::TEXT AS created_at
+        FROM operator_imei_events
+        ORDER BY created_at DESC
+        LIMIT 250
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) async fn build_imei_compliance_summary(
+    pool: &PgPool,
+) -> Result<ImeiComplianceSummary, sqlx::Error> {
+    let latest_events = fetch_imei_events(pool).await?;
+    let counts = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
+        r#"
+        SELECT
+            COUNT(*) AS total_events,
+            COUNT(*) FILTER (WHERE compliance_status = 'cleared') AS cleared_events,
+            COUNT(*) FILTER (WHERE compliance_status = 'pending') AS pending_events,
+            COUNT(*) FILTER (WHERE compliance_status = 'blocked') AS blocked_events,
+            COUNT(*) FILTER (WHERE compliance_status = 'unknown') AS unknown_events,
+            COUNT(DISTINCT imei_hash) AS distinct_devices
+        FROM operator_imei_events
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+    let operators = sqlx::query_as::<_, (String,)>(
+        r#"
+        SELECT DISTINCT operator_name
+        FROM operator_imei_events
+        ORDER BY operator_name
+        "#,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| row.0)
+    .collect::<Vec<_>>();
+
+    Ok(ImeiComplianceSummary {
+        total_events: counts.0,
+        cleared_events: counts.1,
+        pending_events: counts.2,
+        blocked_events: counts.3,
+        unknown_events: counts.4,
+        distinct_devices: counts.5,
+        operators,
+        latest_events: latest_events.into_iter().take(12).collect(),
+        regulatory_note: "Cameroon operator feeds should support IMEI customs verification for devices first connecting to local mobile networks from April 1, 2026, with blocking enforcement reported from May 25, 2026.".into(),
+    })
 }
 
 fn asset_health_label(score: f64) -> String {

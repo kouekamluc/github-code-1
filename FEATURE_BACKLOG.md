@@ -13,6 +13,7 @@
 
 - User accounts, roles, and audit logs.
 - Deeper workspace separation for different councils, NGOs, and companies.
+- Production operator connectors for MTN Cameroon, Orange Cameroun, Camtel, and customs/CAMCIS IMEI status feeds.
 - Site profiles that group assets, reports, tickets, alerts, and IoT readings under one physical place.
 - Survey campaign builder with reusable forms, offline field collection, photos, and GPS proof.
 - File/photo uploads for field reports and maintenance completion evidence.

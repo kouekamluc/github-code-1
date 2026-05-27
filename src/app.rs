@@ -5,7 +5,7 @@ use std::env;
 
 use crate::db::ensure_schema;
 use crate::routes;
-use crate::seeds::{seed_operational_demo, seed_sample_data};
+use crate::seeds::{seed_operational_demo, seed_root_user, seed_sample_data};
 
 pub(crate) async fn run() -> std::io::Result<()> {
     dotenv().ok();
@@ -29,6 +29,11 @@ pub(crate) async fn run() -> std::io::Result<()> {
 
     seed_sample_data(&pool).await.map_err(|err| {
         eprintln!("Failed to seed sample data: {}", err);
+        std::io::Error::other(err)
+    })?;
+
+    seed_root_user(&pool).await.map_err(|err| {
+        eprintln!("Failed to seed root user: {}", err);
         std::io::Error::other(err)
     })?;
 

@@ -1,8 +1,52 @@
-use actix_web::{get, patch, post, web, HttpResponse, Responder};
+use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, Responder};
 use sqlx::PgPool;
 
 use crate::models::*;
 use crate::services::*;
+use crate::workflow::{
+    validate_decision_approval, validate_execution_completion, validate_execution_plan_creation,
+    validate_ticket_completion, validate_transition, WorkflowKind,
+};
+
+fn header_value(request: &HttpRequest, name: &str) -> Option<String> {
+    request
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+async fn request_context(
+    pool: &PgPool,
+    request: &HttpRequest,
+) -> Result<UserContext, HttpResponse> {
+    auth_context_from_token(pool, header_value(request, "x-kk-session").as_deref())
+        .await
+        .map_err(|err| {
+            eprintln!("Failed to resolve auth context: {}", err);
+            HttpResponse::InternalServerError().finish()
+        })
+}
+
+async fn require_permission(
+    pool: &PgPool,
+    request: &HttpRequest,
+    permission: &str,
+) -> Result<UserContext, HttpResponse> {
+    let context = request_context(pool, request).await?;
+    if context.permissions.iter().any(|value| value == permission) {
+        Ok(context)
+    } else {
+        Err(HttpResponse::Forbidden().json(ApiError {
+            message: format!(
+                "Role '{}' does not have '{}' permission.",
+                context.role, permission
+            ),
+        }))
+    }
+}
 
 #[get("/api/summary")]
 pub(crate) async fn summary(pool: web::Data<PgPool>) -> impl Responder {
@@ -21,6 +65,49 @@ pub(crate) async fn overview(pool: web::Data<PgPool>) -> impl Responder {
         Ok(overview) => HttpResponse::Ok().json(overview),
         Err(err) => {
             eprintln!("Failed to build overview intelligence: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/auth/context")]
+pub(crate) async fn auth_context(request: HttpRequest, pool: web::Data<PgPool>) -> impl Responder {
+    match request_context(pool.get_ref(), &request).await {
+        Ok(context) => HttpResponse::Ok().json(context),
+        Err(response) => response,
+    }
+}
+
+#[post("/api/auth/login")]
+pub(crate) async fn login(
+    pool: web::Data<PgPool>,
+    payload: web::Json<LoginRequest>,
+) -> impl Responder {
+    match login_user(pool.get_ref(), &payload).await {
+        Ok(Some(response)) => HttpResponse::Ok().json(response),
+        Ok(None) => HttpResponse::Unauthorized().json(ApiError {
+            message: "Invalid username, email, or password.".into(),
+        }),
+        Err(err) => {
+            eprintln!("Failed to log in: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/audit-events")]
+pub(crate) async fn list_audit_events(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    query: web::Query<AuditEventQuery>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "audit:read").await {
+        return response;
+    }
+    match fetch_audit_events(pool.get_ref(), &query).await {
+        Ok(events) => HttpResponse::Ok().json(events),
+        Err(err) => {
+            eprintln!("Failed to query audit events: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }
@@ -88,9 +175,13 @@ pub(crate) async fn phone_matrix_recalculate(
 
 #[post("/api/stats/update")]
 pub(crate) async fn update_stats(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<UpdateLocationRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "data:write").await {
+        return response;
+    }
     if let Err(message) = payload.validate() {
         return HttpResponse::BadRequest().json(ApiError { message });
     }
@@ -178,9 +269,13 @@ pub(crate) async fn list_site_profiles(pool: web::Data<PgPool>) -> impl Responde
 
 #[post("/api/site-profiles")]
 pub(crate) async fn create_site_profile(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<SiteProfileRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "data:write").await {
+        return response;
+    }
     for (value, label) in [
         (&payload.name, "Site name"),
         (&payload.site_type, "Site type"),
@@ -266,9 +361,13 @@ pub(crate) async fn list_survey_campaigns(pool: web::Data<PgPool>) -> impl Respo
 
 #[post("/api/survey-campaigns")]
 pub(crate) async fn create_survey_campaign(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<SurveyCampaignRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "data:write").await {
+        return response;
+    }
     for (value, label) in [
         (&payload.name, "Campaign name"),
         (&payload.form_type, "Form type"),
@@ -334,40 +433,64 @@ pub(crate) async fn create_survey_campaign(
 
 #[patch("/api/survey-campaigns/{id}/status")]
 pub(crate) async fn update_survey_campaign_status(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     path: web::Path<i64>,
     payload: web::Json<SurveyCampaignStatusRequest>,
 ) -> impl Responder {
-    let allowed = [
-        "draft",
-        "ready",
-        "in_field",
-        "reviewing",
-        "completed",
-        "paused",
-        "cancelled",
-        "active",
-    ];
-    if !allowed.contains(&payload.status.as_str()) {
-        return HttpResponse::BadRequest().json(ApiError {
-            message: "Unsupported campaign status.".into(),
-        });
+    let context = match require_permission(pool.get_ref(), &request, "workflow:transition").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let id = *path;
+    let status = payload.status.trim();
+    let current = match fetch_workflow_value(pool.get_ref(), WorkflowKind::SurveyCampaign, id).await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Survey campaign not found.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to load survey campaign status: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    if let Err(message) = validate_transition(WorkflowKind::SurveyCampaign, &current, status) {
+        return HttpResponse::BadRequest().json(ApiError { message });
     }
 
     let result = sqlx::query("UPDATE survey_campaigns SET status = $1 WHERE id = $2")
-        .bind(&payload.status)
-        .bind(*path)
+        .bind(status)
+        .bind(id)
         .execute(pool.get_ref())
         .await;
 
     match result {
-        Ok(_) => match fetch_survey_campaigns(pool.get_ref()).await {
-            Ok(campaigns) => HttpResponse::Ok().json(campaigns),
-            Err(err) => {
-                eprintln!("Failed to return survey campaigns: {}", err);
-                HttpResponse::InternalServerError().finish()
+        Ok(_) => {
+            if let Err(err) = record_audit_event(
+                pool.get_ref(),
+                WorkflowKind::SurveyCampaign,
+                id,
+                &current,
+                status,
+                &context.actor,
+                None,
+            )
+            .await
+            {
+                eprintln!("Failed to audit survey campaign status change: {}", err);
+                return HttpResponse::InternalServerError().finish();
             }
-        },
+            match fetch_survey_campaigns(pool.get_ref()).await {
+                Ok(campaigns) => HttpResponse::Ok().json(campaigns),
+                Err(err) => {
+                    eprintln!("Failed to return survey campaigns: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("Failed to update survey campaign status: {}", err);
             HttpResponse::InternalServerError().finish()
@@ -399,9 +522,13 @@ pub(crate) async fn decision_board(pool: web::Data<PgPool>) -> impl Responder {
 
 #[post("/api/decision-snapshots")]
 pub(crate) async fn create_decision_snapshot(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<DecisionSnapshotRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "data:write").await {
+        return response;
+    }
     if let Err(message) = validate_required(&payload.title, "Decision title") {
         return HttpResponse::BadRequest().json(ApiError { message });
     }
@@ -480,10 +607,12 @@ pub(crate) async fn create_decision_snapshot(
 
 #[patch("/api/decision-snapshots/{id}/status")]
 pub(crate) async fn update_decision_status(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     path: web::Path<i64>,
     payload: web::Json<DecisionStatusRequest>,
 ) -> impl Responder {
+    let id = *path;
     let stage = payload.decision_stage.trim();
     if !matches!(
         stage,
@@ -492,6 +621,42 @@ pub(crate) async fn update_decision_status(
         return HttpResponse::BadRequest().json(ApiError {
             message: "Decision stage is not supported.".into(),
         });
+    }
+    let decisions = match fetch_decision_snapshots(pool.get_ref()).await {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Failed to load decision status: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let Some(decision) = decisions.into_iter().find(|item| item.id == id) else {
+        return HttpResponse::NotFound().json(ApiError {
+            message: "Decision not found.".into(),
+        });
+    };
+    if let Err(message) =
+        validate_transition(WorkflowKind::Decision, &decision.decision_stage, stage)
+    {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    let context = if stage == "approved" {
+        match require_permission(pool.get_ref(), &request, "decision:approve").await {
+            Ok(context) => context,
+            Err(response) => return response,
+        }
+    } else {
+        match require_permission(pool.get_ref(), &request, "workflow:transition").await {
+            Ok(context) => context,
+            Err(response) => return response,
+        }
+    };
+    if let Err(message) = validate_decision_approval(
+        stage,
+        decision.evidence_score,
+        decision.recommended_budget_xaf,
+        payload.approval_notes.as_deref(),
+    ) {
+        return HttpResponse::BadRequest().json(ApiError { message });
     }
     let execution_status = payload.execution_status.clone().unwrap_or_else(|| {
         match stage {
@@ -516,18 +681,34 @@ pub(crate) async fn update_decision_status(
     .bind(stage)
     .bind(execution_status)
     .bind(&payload.approval_notes)
-    .bind(*path)
+    .bind(id)
     .execute(pool.get_ref())
     .await;
 
     match result {
-        Ok(_) => match build_decision_board(pool.get_ref()).await {
-            Ok(board) => HttpResponse::Ok().json(board),
-            Err(err) => {
-                eprintln!("Failed to return decision board: {}", err);
-                HttpResponse::InternalServerError().finish()
+        Ok(_) => {
+            if let Err(err) = record_audit_event(
+                pool.get_ref(),
+                WorkflowKind::Decision,
+                id,
+                &decision.decision_stage,
+                stage,
+                &context.actor,
+                payload.approval_notes.as_deref(),
+            )
+            .await
+            {
+                eprintln!("Failed to audit decision status change: {}", err);
+                return HttpResponse::InternalServerError().finish();
             }
-        },
+            match build_decision_board(pool.get_ref()).await {
+                Ok(board) => HttpResponse::Ok().json(board),
+                Err(err) => {
+                    eprintln!("Failed to return decision board: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("Failed to update decision status: {}", err);
             HttpResponse::InternalServerError().finish()
@@ -559,9 +740,13 @@ pub(crate) async fn execution_board(pool: web::Data<PgPool>) -> impl Responder {
 
 #[post("/api/decision-snapshots/{id}/execution-plan")]
 pub(crate) async fn create_execution_plan_from_decision(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     path: web::Path<i64>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "decision:approve").await {
+        return response;
+    }
     let decision_id = *path;
     let decisions = match fetch_decision_snapshots(pool.get_ref()).await {
         Ok(value) => value,
@@ -575,6 +760,11 @@ pub(crate) async fn create_execution_plan_from_decision(
             message: "Decision not found.".into(),
         });
     };
+    if let Err(message) =
+        validate_execution_plan_creation(&decision.decision_stage, decision.evidence_score)
+    {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
 
     let result = sqlx::query(
         r#"
@@ -633,10 +823,12 @@ pub(crate) async fn create_execution_plan_from_decision(
 
 #[patch("/api/execution-plans/{id}/status")]
 pub(crate) async fn update_execution_plan_status(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     path: web::Path<i64>,
     payload: web::Json<ExecutionPlanStatusRequest>,
 ) -> impl Responder {
+    let id = *path;
     let status = payload.status.trim();
     if !matches!(
         status,
@@ -646,6 +838,36 @@ pub(crate) async fn update_execution_plan_status(
             message: "Execution status is not supported.".into(),
         });
     }
+    let current = match fetch_workflow_value(pool.get_ref(), WorkflowKind::ExecutionPlan, id).await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Execution plan not found.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to load execution plan status: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    if let Err(message) = validate_transition(WorkflowKind::ExecutionPlan, &current, status) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    if let Err(message) = validate_execution_completion(status, payload.outcome_notes.as_deref()) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    let context = if status == "completed" {
+        match require_permission(pool.get_ref(), &request, "execution:complete").await {
+            Ok(context) => context,
+            Err(response) => return response,
+        }
+    } else {
+        match require_permission(pool.get_ref(), &request, "workflow:transition").await {
+            Ok(context) => context,
+            Err(response) => return response,
+        }
+    };
 
     let result = sqlx::query(
         r#"
@@ -670,18 +892,37 @@ pub(crate) async fn update_execution_plan_status(
     .bind(payload.xaf_budget_approved)
     .bind(&payload.blocker)
     .bind(&payload.outcome_notes)
-    .bind(*path)
+    .bind(id)
     .execute(pool.get_ref())
     .await;
 
     match result {
-        Ok(_) => match build_execution_board(pool.get_ref()).await {
-            Ok(board) => HttpResponse::Ok().json(board),
-            Err(err) => {
-                eprintln!("Failed to return execution board: {}", err);
-                HttpResponse::InternalServerError().finish()
+        Ok(_) => {
+            if let Err(err) = record_audit_event(
+                pool.get_ref(),
+                WorkflowKind::ExecutionPlan,
+                id,
+                &current,
+                status,
+                &context.actor,
+                payload
+                    .outcome_notes
+                    .as_deref()
+                    .or(payload.blocker.as_deref()),
+            )
+            .await
+            {
+                eprintln!("Failed to audit execution plan status change: {}", err);
+                return HttpResponse::InternalServerError().finish();
             }
-        },
+            match build_execution_board(pool.get_ref()).await {
+                Ok(board) => HttpResponse::Ok().json(board),
+                Err(err) => {
+                    eprintln!("Failed to return execution board: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("Failed to update execution plan: {}", err);
             HttpResponse::InternalServerError().finish()
@@ -702,9 +943,13 @@ pub(crate) async fn list_organizations(pool: web::Data<PgPool>) -> impl Responde
 
 #[post("/api/organizations")]
 pub(crate) async fn create_organization(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<OrganizationRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        return response;
+    }
     let result = sqlx::query(
         r#"
         INSERT INTO organizations (name, org_type, contact_name, contact_email)
@@ -751,9 +996,13 @@ pub(crate) async fn list_projects(pool: web::Data<PgPool>) -> impl Responder {
 
 #[post("/api/projects")]
 pub(crate) async fn create_project(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<ProjectRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        return response;
+    }
     let result = sqlx::query(
         r#"
         INSERT INTO projects (organization_id, name, sector, region, status, start_date)
@@ -838,9 +1087,13 @@ pub(crate) async fn area_dossier(
 
 #[post("/api/assets")]
 pub(crate) async fn create_asset(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<AssetRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "data:write").await {
+        return response;
+    }
     if let Err(message) = validate_gps(payload.latitude, payload.longitude) {
         return HttpResponse::BadRequest().json(ApiError { message });
     }
@@ -900,15 +1153,36 @@ pub(crate) async fn create_asset(
 
 #[patch("/api/assets/{id}/status")]
 pub(crate) async fn update_asset_status(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     path: web::Path<i64>,
     payload: web::Json<AssetStatusRequest>,
 ) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workflow:transition").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let id = *path;
     let status = payload.status.trim();
     if !matches!(status, "online" | "warning" | "critical" | "offline") {
         return HttpResponse::BadRequest().json(ApiError {
             message: "Asset status must be online, warning, critical, or offline.".into(),
         });
+    }
+    let current = match fetch_workflow_value(pool.get_ref(), WorkflowKind::Asset, id).await {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Asset not found.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to load asset status: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    if let Err(message) = validate_transition(WorkflowKind::Asset, &current, status) {
+        return HttpResponse::BadRequest().json(ApiError { message });
     }
 
     let result = sqlx::query(
@@ -922,18 +1196,34 @@ pub(crate) async fn update_asset_status(
     )
     .bind(status)
     .bind(&payload.notes)
-    .bind(*path)
+    .bind(id)
     .execute(pool.get_ref())
     .await;
 
     match result {
-        Ok(_) => match fetch_assets(pool.get_ref()).await {
-            Ok(assets) => HttpResponse::Ok().json(assets),
-            Err(err) => {
-                eprintln!("Failed to return assets after status update: {}", err);
-                HttpResponse::InternalServerError().finish()
+        Ok(_) => {
+            if let Err(err) = record_audit_event(
+                pool.get_ref(),
+                WorkflowKind::Asset,
+                id,
+                &current,
+                status,
+                &context.actor,
+                payload.notes.as_deref(),
+            )
+            .await
+            {
+                eprintln!("Failed to audit asset status change: {}", err);
+                return HttpResponse::InternalServerError().finish();
             }
-        },
+            match fetch_assets(pool.get_ref()).await {
+                Ok(assets) => HttpResponse::Ok().json(assets),
+                Err(err) => {
+                    eprintln!("Failed to return assets after status update: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("Failed to update asset status: {}", err);
             HttpResponse::InternalServerError().finish()
@@ -954,9 +1244,13 @@ pub(crate) async fn list_reports(pool: web::Data<PgPool>) -> impl Responder {
 
 #[post("/api/reports")]
 pub(crate) async fn create_report(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<FieldReportRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "field:submit").await {
+        return response;
+    }
     if let Err(message) = validate_gps(payload.latitude, payload.longitude) {
         return HttpResponse::BadRequest().json(ApiError { message });
     }
@@ -1020,9 +1314,14 @@ pub(crate) async fn list_alerts(pool: web::Data<PgPool>) -> impl Responder {
 
 #[post("/api/alerts")]
 pub(crate) async fn create_alert(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<AlertRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "workflow:transition").await
+    {
+        return response;
+    }
     let result = sqlx::query(
         r#"
         INSERT INTO alerts (project_id, site_profile_id, asset_id, severity, title, message, status)
@@ -1055,10 +1354,33 @@ pub(crate) async fn create_alert(
 
 #[patch("/api/alerts/{id}")]
 pub(crate) async fn update_alert_status(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     path: web::Path<i64>,
     payload: web::Json<AlertStatusRequest>,
 ) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workflow:transition").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let id = *path;
+    let status = payload.status.trim();
+    let current = match fetch_workflow_value(pool.get_ref(), WorkflowKind::Alert, id).await {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Alert not found.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to load alert status: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    if let Err(message) = validate_transition(WorkflowKind::Alert, &current, status) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+
     let result = sqlx::query(
         r#"
         UPDATE alerts
@@ -1067,19 +1389,35 @@ pub(crate) async fn update_alert_status(
         WHERE id = $2
         "#,
     )
-    .bind(&payload.status)
-    .bind(*path)
+    .bind(status)
+    .bind(id)
     .execute(pool.get_ref())
     .await;
 
     match result {
-        Ok(_) => match fetch_alerts(pool.get_ref()).await {
-            Ok(alerts) => HttpResponse::Ok().json(alerts),
-            Err(err) => {
-                eprintln!("Failed to return alerts: {}", err);
-                HttpResponse::InternalServerError().finish()
+        Ok(_) => {
+            if let Err(err) = record_audit_event(
+                pool.get_ref(),
+                WorkflowKind::Alert,
+                id,
+                &current,
+                status,
+                &context.actor,
+                None,
+            )
+            .await
+            {
+                eprintln!("Failed to audit alert status change: {}", err);
+                return HttpResponse::InternalServerError().finish();
             }
-        },
+            match fetch_alerts(pool.get_ref()).await {
+                Ok(alerts) => HttpResponse::Ok().json(alerts),
+                Err(err) => {
+                    eprintln!("Failed to return alerts: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("Failed to update alert: {}", err);
             HttpResponse::InternalServerError().finish()
@@ -1100,9 +1438,25 @@ pub(crate) async fn list_tickets(pool: web::Data<PgPool>) -> impl Responder {
 
 #[post("/api/tickets")]
 pub(crate) async fn create_ticket(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<MaintenanceTicketRequest>,
 ) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workflow:transition").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let previous_alert_status = if let Some(alert_id) = payload.alert_id {
+        match fetch_workflow_value(pool.get_ref(), WorkflowKind::Alert, alert_id).await {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("Failed to load linked alert for ticket creation: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    } else {
+        None
+    };
     let result = sqlx::query(
         r#"
         INSERT INTO maintenance_tickets (
@@ -1124,13 +1478,49 @@ pub(crate) async fn create_ticket(
     .await;
 
     match result {
-        Ok(_) => match fetch_tickets(pool.get_ref()).await {
-            Ok(tickets) => HttpResponse::Ok().json(tickets),
-            Err(err) => {
-                eprintln!("Failed to return tickets: {}", err);
-                HttpResponse::InternalServerError().finish()
+        Ok(_) => {
+            if let (Some(alert_id), Some(previous_status)) =
+                (payload.alert_id, previous_alert_status.as_deref())
+            {
+                if matches!(previous_status, "open" | "acknowledged") {
+                    if let Err(message) =
+                        validate_transition(WorkflowKind::Alert, previous_status, "ticketed")
+                    {
+                        return HttpResponse::BadRequest().json(ApiError { message });
+                    }
+                    let alert_update =
+                        sqlx::query("UPDATE alerts SET status = 'ticketed' WHERE id = $1")
+                            .bind(alert_id)
+                            .execute(pool.get_ref())
+                            .await;
+                    if let Err(err) = alert_update {
+                        eprintln!("Failed to mark alert ticketed: {}", err);
+                        return HttpResponse::InternalServerError().finish();
+                    }
+                    if let Err(err) = record_audit_event(
+                        pool.get_ref(),
+                        WorkflowKind::Alert,
+                        alert_id,
+                        previous_status,
+                        "ticketed",
+                        &context.actor,
+                        Some("Ticket created from alert."),
+                    )
+                    .await
+                    {
+                        eprintln!("Failed to audit alert ticketing: {}", err);
+                        return HttpResponse::InternalServerError().finish();
+                    }
+                }
             }
-        },
+            match fetch_tickets(pool.get_ref()).await {
+                Ok(tickets) => HttpResponse::Ok().json(tickets),
+                Err(err) => {
+                    eprintln!("Failed to return tickets: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("Failed to create ticket: {}", err);
             HttpResponse::InternalServerError().finish()
@@ -1140,10 +1530,62 @@ pub(crate) async fn create_ticket(
 
 #[patch("/api/tickets/{id}")]
 pub(crate) async fn update_ticket_status(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     path: web::Path<i64>,
     payload: web::Json<MaintenanceTicketStatusRequest>,
 ) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workflow:transition").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let id = *path;
+    let status = payload.status.trim();
+    let current =
+        match fetch_workflow_value(pool.get_ref(), WorkflowKind::MaintenanceTicket, id).await {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                return HttpResponse::NotFound().json(ApiError {
+                    message: "Maintenance ticket not found.".into(),
+                })
+            }
+            Err(err) => {
+                eprintln!("Failed to load ticket status: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+        };
+    if let Err(message) = validate_transition(WorkflowKind::MaintenanceTicket, &current, status) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    if let Err(message) = validate_ticket_completion(status, payload.resolution_notes.as_deref()) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+    let linked_alert = match sqlx::query_as::<_, (Option<i64>,)>(
+        "SELECT alert_id FROM maintenance_tickets WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool.get_ref())
+    .await
+    {
+        Ok(Some(row)) => row.0,
+        Ok(None) => None,
+        Err(err) => {
+            eprintln!("Failed to load ticket alert link: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let previous_alert_status = if let Some(alert_id) = linked_alert {
+        match fetch_workflow_value(pool.get_ref(), WorkflowKind::Alert, alert_id).await {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("Failed to load linked alert status: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    } else {
+        None
+    };
+
     let result = sqlx::query(
         r#"
         UPDATE maintenance_tickets
@@ -1153,20 +1595,78 @@ pub(crate) async fn update_ticket_status(
         WHERE id = $3
         "#,
     )
-    .bind(&payload.status)
+    .bind(status)
     .bind(&payload.resolution_notes)
-    .bind(*path)
+    .bind(id)
     .execute(pool.get_ref())
     .await;
 
     match result {
-        Ok(_) => match fetch_tickets(pool.get_ref()).await {
-            Ok(tickets) => HttpResponse::Ok().json(tickets),
-            Err(err) => {
-                eprintln!("Failed to return tickets: {}", err);
-                HttpResponse::InternalServerError().finish()
+        Ok(_) => {
+            if let Err(err) = record_audit_event(
+                pool.get_ref(),
+                WorkflowKind::MaintenanceTicket,
+                id,
+                &current,
+                status,
+                &context.actor,
+                payload.resolution_notes.as_deref(),
+            )
+            .await
+            {
+                eprintln!("Failed to audit ticket status change: {}", err);
+                return HttpResponse::InternalServerError().finish();
             }
-        },
+            if matches!(status, "done" | "completed") {
+                if let (Some(alert_id), Some(previous_status)) =
+                    (linked_alert, previous_alert_status.as_deref())
+                {
+                    if previous_status != "resolved" {
+                        if let Err(message) =
+                            validate_transition(WorkflowKind::Alert, previous_status, "resolved")
+                        {
+                            return HttpResponse::BadRequest().json(ApiError { message });
+                        }
+                        let alert_update = sqlx::query(
+                            r#"
+                            UPDATE alerts
+                            SET status = 'resolved',
+                                resolved_at = NOW()
+                            WHERE id = $1
+                            "#,
+                        )
+                        .bind(alert_id)
+                        .execute(pool.get_ref())
+                        .await;
+                        if let Err(err) = alert_update {
+                            eprintln!("Failed to resolve linked alert: {}", err);
+                            return HttpResponse::InternalServerError().finish();
+                        }
+                        if let Err(err) = record_audit_event(
+                            pool.get_ref(),
+                            WorkflowKind::Alert,
+                            alert_id,
+                            previous_status,
+                            "resolved",
+                            &context.actor,
+                            Some("Linked ticket completed."),
+                        )
+                        .await
+                        {
+                            eprintln!("Failed to audit linked alert resolution: {}", err);
+                            return HttpResponse::InternalServerError().finish();
+                        }
+                    }
+                }
+            }
+            match fetch_tickets(pool.get_ref()).await {
+                Ok(tickets) => HttpResponse::Ok().json(tickets),
+                Err(err) => {
+                    eprintln!("Failed to return tickets: {}", err);
+                    HttpResponse::InternalServerError().finish()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("Failed to update ticket: {}", err);
             HttpResponse::InternalServerError().finish()
@@ -1187,9 +1687,13 @@ pub(crate) async fn list_iot_readings(pool: web::Data<PgPool>) -> impl Responder
 
 #[post("/api/iot/readings")]
 pub(crate) async fn create_iot_reading(
+    request: HttpRequest,
     pool: web::Data<PgPool>,
     payload: web::Json<IotReadingRequest>,
 ) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "telemetry:write").await {
+        return response;
+    }
     let result = sqlx::query(
         r#"
         INSERT INTO iot_readings (
@@ -1218,6 +1722,89 @@ pub(crate) async fn create_iot_reading(
         },
         Err(err) => {
             eprintln!("Failed to create IoT reading: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/operator-imei-events")]
+pub(crate) async fn imei_compliance_summary(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "audit:read").await {
+        return response;
+    }
+    match build_imei_compliance_summary(pool.get_ref()).await {
+        Ok(compliance_summary) => HttpResponse::Ok().json(compliance_summary),
+        Err(err) => {
+            eprintln!("Failed to build IMEI compliance summary: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/operator-imei-events")]
+pub(crate) async fn ingest_imei_event(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    payload: web::Json<OperatorImeiEventRequest>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "telemetry:write").await {
+        return response;
+    }
+    if let Err(message) = validate_imei_event(&payload) {
+        return HttpResponse::BadRequest().json(ApiError { message });
+    }
+
+    let imei_hash = payload
+        .imei_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| payload.imei.as_deref().map(imei_fingerprint))
+        .unwrap_or_default();
+    let last4 = payload.imei.as_deref().and_then(imei_last4);
+    let source_system = payload
+        .source_system
+        .clone()
+        .unwrap_or_else(|| "operator_api".into());
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO operator_imei_events (
+            operator_name, imei_hash, imei_last4, device_type, event_type,
+            compliance_status, region, department, commune, source_system,
+            raw_reference, network_first_seen_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::TIMESTAMPTZ)
+        "#,
+    )
+    .bind(&payload.operator_name)
+    .bind(imei_hash)
+    .bind(last4)
+    .bind(&payload.device_type)
+    .bind(&payload.event_type)
+    .bind(&payload.compliance_status)
+    .bind(&payload.region)
+    .bind(&payload.department)
+    .bind(&payload.commune)
+    .bind(source_system)
+    .bind(&payload.raw_reference)
+    .bind(&payload.network_first_seen_at)
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(_) => match build_imei_compliance_summary(pool.get_ref()).await {
+            Ok(compliance_summary) => HttpResponse::Ok().json(compliance_summary),
+            Err(err) => {
+                eprintln!("Failed to return IMEI compliance summary: {}", err);
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        Err(err) => {
+            eprintln!("Failed to ingest IMEI event: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }

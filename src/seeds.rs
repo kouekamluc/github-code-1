@@ -1,6 +1,40 @@
+use std::env;
+
 use sqlx::PgPool;
 
 use crate::models::SeedLocation;
+use crate::services::hash_password;
+
+pub(crate) async fn seed_root_user(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let username = env::var("ROOT_USERNAME").unwrap_or_else(|_| "root".into());
+    let email = env::var("ROOT_EMAIL").unwrap_or_else(|_| "root@localhost".into());
+    let display_name = env::var("ROOT_DISPLAY_NAME").unwrap_or_else(|_| username.clone());
+    let password = env::var("ROOT_PASSWORD").unwrap_or_else(|_| "change-me-before-use".into());
+    let password_hash =
+        hash_password(&password).map_err(|err| sqlx::Error::Protocol(err.to_string()))?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO users (username, email, display_name, role, password_hash, is_active)
+        VALUES ($1, $2, $3, 'admin', $4, TRUE)
+        ON CONFLICT (email)
+        DO UPDATE SET
+            username = EXCLUDED.username,
+            display_name = EXCLUDED.display_name,
+            role = 'admin',
+            password_hash = EXCLUDED.password_hash,
+            is_active = TRUE
+        "#,
+    )
+    .bind(username)
+    .bind(email)
+    .bind(display_name)
+    .bind(password_hash)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
 
 pub(crate) async fn seed_operational_demo(pool: &PgPool) -> Result<(), sqlx::Error> {
     let seeded_orgs: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM organizations")
@@ -465,6 +499,71 @@ pub(crate) async fn seed_operational_demo(pool: &PgPool) -> Result<(), sqlx::Err
             .bind(reading.1)
             .bind(reading.2)
             .bind(reading.3)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    let seeded_imei_events: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM operator_imei_events")
+        .fetch_one(pool)
+        .await?;
+    if seeded_imei_events.0 == 0 {
+        let imei_events = vec![
+            (
+                "MTN Cameroon",
+                "356938035643809",
+                "smartphone",
+                "activation",
+                "cleared",
+                "Littoral",
+                "Moungo",
+                "Bare-Bakem",
+                "CAMCIS-DEMO-001",
+            ),
+            (
+                "Orange Cameroun",
+                "490154203237518",
+                "smartphone",
+                "verification",
+                "pending",
+                "Sud-Ouest",
+                "Fako",
+                "Buea",
+                "CAMCIS-DEMO-002",
+            ),
+            (
+                "Camtel",
+                "352099001761481",
+                "tablet",
+                "blocked",
+                "blocked",
+                "Nord",
+                "Benoue",
+                "Garoua I",
+                "CAMCIS-DEMO-003",
+            ),
+        ];
+
+        for event in imei_events {
+            sqlx::query(
+                r#"
+                INSERT INTO operator_imei_events (
+                    operator_name, imei_hash, imei_last4, device_type, event_type,
+                    compliance_status, region, department, commune, source_system,
+                    raw_reference, network_first_seen_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'operator_api', $10, NOW())
+                "#,
+            )
+            .bind(event.0)
+            .bind(crate::services::imei_fingerprint(event.1))
+            .bind(crate::services::imei_last4(event.1))
+            .bind(event.2)
+            .bind(event.3)
+            .bind(event.4)
+            .bind(event.5)
+            .bind(event.6)
+            .bind(event.7)
+            .bind(event.8)
             .execute(pool)
             .await?;
         }

@@ -20,6 +20,7 @@ Run the same check with:
 | Phone matrix | Working | Matrix, assumptions, area detail, recalculation endpoint | Add source versioning and admin review for manual overrides |
 | Workspace management | Working | Organization, project, dashboard, readiness cards | Add tenant isolation and workspace-level permissions |
 | Workspace templates | Working backend-owned core | Template registry loads from backend and applying each template creates persisted workspace/site/campaign/action records | Add admin template editor, template version history, and per-tenant template visibility |
+| Archive governance | Working core | Projects, sites, campaigns, assets, reports, alerts, tickets, decisions, execution plans, IMEI events, and templates soft-archive with audit logs | Add restore flow, archive browser, and retention policy approvals |
 | Site profiles | Working | Site creation/edit linked to project, detail drawer, area dossier | Add duplicate review and map-assisted site placement |
 | Survey campaigns | Working core | Campaign create and status transition | Implement form builder, offline submissions, photos, and field-agent assignments |
 | Signal probes/assets | Working core | Asset create/edit, linked site/project, detail drawer, evidence upload, status workflow | Add device registry keys, heartbeat rules, and heartbeat alerting |
@@ -40,10 +41,10 @@ Run the same check with:
 
 ### Phase 1: Make Existing Core Workflows Product-Complete
 
-1. Add delete/archive semantics for mistakes, using soft-delete or archived status where operational history matters.
+1. Add restore flow and archive browser for governance review.
 2. Add the standalone audit-log UI and export filters.
 3. Add admin editing for backend workspace templates.
-4. Add browser-critical regression tests for detail drawers, template cards, and priority alerts.
+4. Add browser-critical regression tests for detail drawers, template cards, priority alerts, and archive controls.
 
 ### Phase 2: Evidence And Field Operations
 
@@ -70,4 +71,4 @@ Run the same check with:
 
 ## Current Priority Recommendation
 
-The app is past demo-only backend wiring for the core flow. The next normal implementation step should be archive/delete semantics plus admin template editing, because records and templates are now persisted but still need controlled correction and governance flows.
+The app is past demo-only backend wiring for the core flow. The next normal implementation step should be restore/archive review plus admin template editing, because records and templates can now be retired safely but still need governed recovery and template maintenance flows.

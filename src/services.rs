@@ -206,12 +206,22 @@ pub(crate) async fn fetch_workflow_value(
     id: i64,
 ) -> Result<Option<String>, sqlx::Error> {
     let query = match kind {
-        WorkflowKind::SurveyCampaign => "SELECT status FROM survey_campaigns WHERE id = $1",
-        WorkflowKind::Alert => "SELECT status FROM alerts WHERE id = $1",
-        WorkflowKind::MaintenanceTicket => "SELECT status FROM maintenance_tickets WHERE id = $1",
-        WorkflowKind::Decision => "SELECT decision_stage FROM decision_snapshots WHERE id = $1",
-        WorkflowKind::ExecutionPlan => "SELECT status FROM execution_plans WHERE id = $1",
-        WorkflowKind::Asset => "SELECT status FROM infrastructure_assets WHERE id = $1",
+        WorkflowKind::SurveyCampaign => {
+            "SELECT status FROM survey_campaigns WHERE id = $1 AND archived_at IS NULL"
+        }
+        WorkflowKind::Alert => "SELECT status FROM alerts WHERE id = $1 AND archived_at IS NULL",
+        WorkflowKind::MaintenanceTicket => {
+            "SELECT status FROM maintenance_tickets WHERE id = $1 AND archived_at IS NULL"
+        }
+        WorkflowKind::Decision => {
+            "SELECT decision_stage FROM decision_snapshots WHERE id = $1 AND archived_at IS NULL"
+        }
+        WorkflowKind::ExecutionPlan => {
+            "SELECT status FROM execution_plans WHERE id = $1 AND archived_at IS NULL"
+        }
+        WorkflowKind::Asset => {
+            "SELECT status FROM infrastructure_assets WHERE id = $1 AND archived_at IS NULL"
+        }
     };
 
     sqlx::query_as::<_, (String,)>(query)
@@ -371,7 +381,7 @@ pub(crate) async fn fetch_workspace_templates(
             active,
             sort_order
         FROM workspace_templates
-        WHERE active = TRUE
+        WHERE active = TRUE AND archived_at IS NULL
         ORDER BY sort_order ASC, title ASC
         "#,
     )
@@ -408,7 +418,7 @@ pub(crate) async fn fetch_workspace_template(
             active,
             sort_order
         FROM workspace_templates
-        WHERE id = $1 AND active = TRUE
+        WHERE id = $1 AND active = TRUE AND archived_at IS NULL
         "#,
     )
     .bind(template_id)
@@ -715,6 +725,7 @@ pub(crate) async fn fetch_projects(pool: &PgPool) -> Result<Vec<Project>, sqlx::
             p.created_at::TEXT AS created_at
         FROM projects p
         LEFT JOIN organizations o ON o.id = p.organization_id
+        WHERE p.archived_at IS NULL
         ORDER BY p.status, p.region NULLS LAST, p.name
         "#,
     )
@@ -742,6 +753,7 @@ pub(crate) async fn fetch_site_profiles(pool: &PgPool) -> Result<Vec<SiteProfile
             s.created_at::TEXT AS created_at
         FROM site_profiles s
         LEFT JOIN projects p ON p.id = s.project_id
+        WHERE s.archived_at IS NULL
         ORDER BY s.region, s.department, s.commune, s.name
         "#,
     )
@@ -771,6 +783,7 @@ pub(crate) async fn fetch_survey_campaigns(
             c.created_at::TEXT AS created_at
         FROM survey_campaigns c
         LEFT JOIN projects p ON p.id = c.project_id
+        WHERE c.archived_at IS NULL
         ORDER BY
             CASE c.status
                 WHEN 'active' THEN 1
@@ -814,6 +827,7 @@ pub(crate) async fn fetch_decision_snapshots(
         LEFT JOIN projects p ON p.id = d.project_id
         LEFT JOIN site_profiles s ON s.id = d.site_profile_id
         LEFT JOIN infrastructure_assets a ON a.id = d.asset_id
+        WHERE d.archived_at IS NULL
         ORDER BY d.created_at DESC
         "#,
     )
@@ -963,6 +977,7 @@ pub(crate) async fn fetch_execution_plans(
         LEFT JOIN projects p ON p.id = e.project_id
         LEFT JOIN site_profiles s ON s.id = e.site_profile_id
         LEFT JOIN infrastructure_assets a ON a.id = e.asset_id
+        WHERE e.archived_at IS NULL
         ORDER BY
             CASE e.status
                 WHEN 'planned' THEN 1
@@ -1059,6 +1074,7 @@ pub(crate) async fn fetch_assets(pool: &PgPool) -> Result<Vec<InfrastructureAsse
         FROM infrastructure_assets a
         LEFT JOIN projects p ON p.id = a.project_id
         LEFT JOIN site_profiles s ON s.id = a.site_profile_id
+        WHERE a.archived_at IS NULL
         ORDER BY a.status DESC, a.region, a.department, a.commune, a.name
         "#,
     )
@@ -1093,6 +1109,7 @@ pub(crate) async fn fetch_reports(pool: &PgPool) -> Result<Vec<FieldReport>, sql
         LEFT JOIN projects p ON p.id = r.project_id
         LEFT JOIN site_profiles s ON s.id = r.site_profile_id
         LEFT JOIN survey_campaigns c ON c.id = r.campaign_id
+        WHERE r.archived_at IS NULL
         ORDER BY r.created_at DESC
         "#,
     )
@@ -1119,6 +1136,7 @@ pub(crate) async fn fetch_alerts(pool: &PgPool) -> Result<Vec<Alert>, sqlx::Erro
         FROM alerts a
         LEFT JOIN projects p ON p.id = a.project_id
         LEFT JOIN site_profiles s ON s.id = a.site_profile_id
+        WHERE a.archived_at IS NULL
         ORDER BY
             CASE severity
                 WHEN 'critical' THEN 1
@@ -1155,6 +1173,7 @@ pub(crate) async fn fetch_tickets(pool: &PgPool) -> Result<Vec<MaintenanceTicket
         FROM maintenance_tickets t
         LEFT JOIN projects p ON p.id = t.project_id
         LEFT JOIN site_profiles s ON s.id = t.site_profile_id
+        WHERE t.archived_at IS NULL
         ORDER BY
             CASE t.status
                 WHEN 'open' THEN 1
@@ -1293,6 +1312,7 @@ pub(crate) async fn fetch_imei_events(
             network_first_seen_at::TEXT AS network_first_seen_at,
             created_at::TEXT AS created_at
         FROM operator_imei_events
+        WHERE archived_at IS NULL
         ORDER BY created_at DESC
         LIMIT 250
         "#,
@@ -1315,6 +1335,7 @@ pub(crate) async fn build_imei_compliance_summary(
             COUNT(*) FILTER (WHERE compliance_status = 'unknown') AS unknown_events,
             COUNT(DISTINCT imei_hash) AS distinct_devices
         FROM operator_imei_events
+        WHERE archived_at IS NULL
         "#,
     )
     .fetch_one(pool)
@@ -1323,6 +1344,7 @@ pub(crate) async fn build_imei_compliance_summary(
         r#"
         SELECT DISTINCT operator_name
         FROM operator_imei_events
+        WHERE archived_at IS NULL
         ORDER BY operator_name
         "#,
     )
@@ -1756,52 +1778,61 @@ pub(crate) async fn build_workspace_health(pool: &PgPool) -> Result<WorkspaceHea
         .fetch_one(pool)
         .await?
         .0;
-    let projects = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM projects")
-        .fetch_one(pool)
-        .await?
-        .0;
+    let projects =
+        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM projects WHERE archived_at IS NULL")
+            .fetch_one(pool)
+            .await?
+            .0;
     let active_projects = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM projects WHERE status IN ('active', 'in_field', 'planning')",
+        "SELECT COUNT(*) FROM projects WHERE archived_at IS NULL AND status IN ('active', 'in_field', 'planning')",
     )
     .fetch_one(pool)
     .await?
     .0;
-    let sites = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM site_profiles")
-        .fetch_one(pool)
-        .await?
-        .0;
-    let campaigns = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM survey_campaigns")
-        .fetch_one(pool)
-        .await?
-        .0;
-    let monitored_assets =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM infrastructure_assets")
+    let sites =
+        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM site_profiles WHERE archived_at IS NULL")
             .fetch_one(pool)
             .await?
             .0;
+    let campaigns = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM survey_campaigns WHERE archived_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?
+    .0;
+    let monitored_assets = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM infrastructure_assets WHERE archived_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?
+    .0;
     let linked_iot_readings = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM iot_readings")
         .fetch_one(pool)
         .await?
         .0;
-    let reports_generated = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM field_reports")
-        .fetch_one(pool)
-        .await?
-        .0;
-    let open_alerts =
-        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM alerts WHERE status <> 'resolved'")
+    let reports_generated =
+        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM field_reports WHERE archived_at IS NULL")
             .fetch_one(pool)
             .await?
             .0;
-    let active_tickets = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('done', 'cancelled')",
+    let open_alerts = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM alerts WHERE archived_at IS NULL AND status <> 'resolved'",
     )
     .fetch_one(pool)
     .await?
     .0;
-    let decision_snapshots = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM decision_snapshots")
-        .fetch_one(pool)
-        .await?
-        .0;
+    let active_tickets = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM maintenance_tickets WHERE archived_at IS NULL AND status NOT IN ('done', 'cancelled')",
+    )
+    .fetch_one(pool)
+    .await?
+    .0;
+    let decision_snapshots = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM decision_snapshots WHERE archived_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?
+    .0;
     let priority_opportunities = build_priority_zones(pool)
         .await?
         .into_iter()

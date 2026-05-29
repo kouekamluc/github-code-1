@@ -259,6 +259,38 @@ foreach ($export in @("assets", "tickets", "priority-zones", "phone-matrix")) {
   Invoke-FeatureApi GET "/api/export/$export.csv" "CSV exports" "$export export downloads" | Out-Null
 }
 
+if (Require-Record $plan "execution plan" "Archive governance" "archive execution plan") {
+  Invoke-FeatureApi PATCH "/api/entities/execution_plan/$($plan.id)/archive" "Archive governance" "archive execution plan" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $decision "decision" "Archive governance" "archive decision") {
+  Invoke-FeatureApi PATCH "/api/entities/decision_snapshot/$($decision.id)/archive" "Archive governance" "archive decision" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $ticket "ticket" "Archive governance" "archive ticket") {
+  Invoke-FeatureApi PATCH "/api/entities/maintenance_ticket/$($ticket.id)/archive" "Archive governance" "archive ticket" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $alert "alert" "Archive governance" "archive alert") {
+  Invoke-FeatureApi PATCH "/api/entities/alert/$($alert.id)/archive" "Archive governance" "archive alert" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $report "report" "Archive governance" "archive report") {
+  Invoke-FeatureApi PATCH "/api/entities/field_report/$($report.id)/archive" "Archive governance" "archive report" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $asset "asset" "Archive governance" "archive asset") {
+  Invoke-FeatureApi PATCH "/api/entities/infrastructure_asset/$($asset.id)/archive" "Archive governance" "archive asset" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $campaign "campaign" "Archive governance" "archive campaign") {
+  Invoke-FeatureApi PATCH "/api/entities/survey_campaign/$($campaign.id)/archive" "Archive governance" "archive campaign" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $site "site" "Archive governance" "archive site") {
+  Invoke-FeatureApi PATCH "/api/entities/site_profile/$($site.id)/archive" "Archive governance" "archive site" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $project "project" "Archive governance" "archive project") {
+  Invoke-FeatureApi PATCH "/api/entities/project/$($project.id)/archive" "Archive governance" "archive project" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+if (Require-Record $imeiEvent "IMEI event" "Archive governance" "archive IMEI event") {
+  Invoke-FeatureApi PATCH "/api/entities/operator_imei_event/$($imeiEvent.id)/archive" "Archive governance" "archive IMEI event" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
+}
+Invoke-FeatureApi GET "/api/audit-events?entity_type=project&entity_id=$($project.id)&limit=5" "Archive governance" "archive audit event readable" $null $authHeaders | Out-Null
+
 $results | Format-Table -AutoSize
 $failed = @($results | Where-Object status -eq "FAIL")
 if ($failed.Count -gt 0) {

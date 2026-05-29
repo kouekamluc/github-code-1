@@ -12,6 +12,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
         .service(entity_detail)
         .service(list_evidence)
         .service(upload_evidence)
+        .service(archive_entity)
         .service(list_stats)
         .service(phone_matrix)
         .service(phone_matrix_detail)

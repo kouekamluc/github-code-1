@@ -446,6 +446,31 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         sqlx::query(statement).execute(pool).await?;
     }
 
+    for table in [
+        "projects",
+        "site_profiles",
+        "survey_campaigns",
+        "infrastructure_assets",
+        "field_reports",
+        "alerts",
+        "maintenance_tickets",
+        "decision_snapshots",
+        "execution_plans",
+        "operator_imei_events",
+        "workspace_templates",
+    ] {
+        let statement = format!(
+            r#"
+            ALTER TABLE {}
+            ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS archived_by TEXT,
+            ADD COLUMN IF NOT EXISTS archive_reason TEXT
+            "#,
+            table
+        );
+        sqlx::query(&statement).execute(pool).await?;
+    }
+
     sqlx::query(
         r#"
         CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique_idx

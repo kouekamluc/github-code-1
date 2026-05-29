@@ -139,6 +139,19 @@ pub(crate) struct EvidenceUploadRequest {
     pub(crate) captured_at: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ArchiveRequest {
+    pub(crate) reason: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ArchiveResponse {
+    pub(crate) entity_type: String,
+    pub(crate) entity_id: String,
+    pub(crate) archived: bool,
+    pub(crate) message: String,
+}
+
 #[derive(Serialize)]
 pub(crate) struct EntityDetail {
     pub(crate) entity_type: String,

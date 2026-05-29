@@ -105,6 +105,22 @@ function detailTitle(type, record) {
   return record?.title || record?.name || record?.report_type || record?.operator_name || `${entityLabel(type)} #${record?.id || ''}`;
 }
 
+function canArchiveEntity(type) {
+  return [
+    'project',
+    'site_profile',
+    'survey_campaign',
+    'infrastructure_asset',
+    'field_report',
+    'alert',
+    'maintenance_ticket',
+    'decision_snapshot',
+    'execution_plan',
+    'operator_imei_event',
+    'workspace_template',
+  ].includes(type);
+}
+
 function renderRecordFields(record) {
   const hidden = new Set(['id', 'created_at', 'updated_at', 'resolved_at', 'last_checked_at', 'sha256_hash', 'storage_path']);
   return Object.entries(record || {})
@@ -154,8 +170,9 @@ async function openEntityDetail(entityType, entityId) {
   const evidence = document.getElementById('entity-evidence-list');
   const audit = document.getElementById('entity-audit-list');
   const form = document.getElementById('entity-evidence-form');
+  const archiveForm = document.getElementById('entity-archive-form');
   const status = document.getElementById('entity-evidence-status');
-  if (!panel || !title || !subtitle || !body || !evidence || !audit || !form) return;
+  if (!panel || !title || !subtitle || !body || !evidence || !audit || !form || !archiveForm) return;
 
   panel.classList.add('is-open');
   panel.setAttribute('aria-hidden', 'false');
@@ -167,6 +184,9 @@ async function openEntityDetail(entityType, entityId) {
   status.innerHTML = '';
   form.dataset.entityType = entityType;
   form.dataset.entityId = entityId;
+  archiveForm.dataset.entityType = entityType;
+  archiveForm.dataset.entityId = entityId;
+  archiveForm.closest('.entity-detail-section').style.display = canArchiveEntity(entityType) ? '' : 'none';
 
   try {
     const detail = await fetchJson(`/api/entities/${entityType}/${entityId}`);
@@ -1187,12 +1207,16 @@ function renderWorkspaces() {
   const templatesTarget = document.getElementById('workspace-templates');
   if (templatesTarget) {
     templatesTarget.innerHTML = workspaceTemplates.length ? workspaceTemplates.map(template => `
-      <button class="template-card workspace-template" data-template="${escapeHtml(template.id)}">
+      <article class="template-card">
         <span>${escapeHtml(template.org_type.replaceAll('_', ' '))}</span>
         <strong>${escapeHtml(template.title)}</strong>
         <small>${escapeHtml(template.description)}</small>
         <small>${escapeHtml((template.required_evidence || []).join(' / '))}</small>
-      </button>
+        <div class="ticket-actions">
+          <button class="btn btn-sm btn-success workspace-template" data-template="${escapeHtml(template.id)}">Apply</button>
+          <button class="btn btn-sm btn-outline-secondary workspace-template-archive" data-template="${escapeHtml(template.id)}">Archive</button>
+        </div>
+      </article>
     `).join('') : '<div class="empty-state">No backend templates are active.</div>';
   }
 
@@ -1425,6 +1449,24 @@ function renderWorkspaces() {
 
   document.querySelectorAll('.workspace-template').forEach(button => {
     button.addEventListener('click', () => applyWorkspaceTemplate(button.dataset.template));
+  });
+  document.querySelectorAll('.workspace-template-archive').forEach(button => {
+    button.addEventListener('click', async () => {
+      const reason = window.prompt('Archive reason for this template?');
+      if (!reason?.trim()) return;
+      try {
+        await fetchJson(`/api/entities/workspace_template/${button.dataset.template}/archive`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: reason.trim() }),
+        });
+        workspaceTemplates = await fetchJson('/api/workspace-templates');
+        renderWorkspaces();
+        setStatus(dataStatus, 'Template archived and audit event written.', 'success');
+      } catch (error) {
+        setStatus(dataStatus, error.message, 'danger');
+      }
+    });
   });
 }
 
@@ -3395,6 +3437,30 @@ document.getElementById('entity-evidence-form')?.addEventListener('submit', asyn
     form.reset();
     setStatus(status, 'Evidence attached.', 'success');
     await openEntityDetail(form.dataset.entityType, form.dataset.entityId);
+  } catch (error) {
+    setStatus(status, error.message, 'danger');
+  }
+});
+
+document.getElementById('entity-archive-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const status = document.getElementById('entity-archive-status');
+  const reason = document.getElementById('entityArchiveReason').value.trim();
+  if (!reason) {
+    setStatus(status, 'Archive reason is required.', 'danger');
+    return;
+  }
+  try {
+    setStatus(status, 'Archiving record...', 'info');
+    await fetchJson(`/api/entities/${form.dataset.entityType}/${form.dataset.entityId}/archive`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    setStatus(status, 'Record archived and audit event written.', 'success');
+    closeEntityDetail();
+    await refreshData();
   } catch (error) {
     setStatus(status, error.message, 'danger');
   }

@@ -75,6 +75,24 @@ fn normalize_entity_type(value: &str) -> Option<&'static str> {
         "decision" | "decision_snapshot" | "decision_snapshots" => Some("decision_snapshot"),
         "execution" | "execution_plan" | "execution_plans" => Some("execution_plan"),
         "imei" | "operator_imei_event" | "operator_imei_events" => Some("operator_imei_event"),
+        "template" | "workspace_template" | "workspace_templates" => Some("workspace_template"),
+        _ => None,
+    }
+}
+
+fn archive_table_for_entity(entity_type: &str) -> Option<&'static str> {
+    match entity_type {
+        "project" => Some("projects"),
+        "site_profile" => Some("site_profiles"),
+        "survey_campaign" => Some("survey_campaigns"),
+        "infrastructure_asset" => Some("infrastructure_assets"),
+        "field_report" => Some("field_reports"),
+        "alert" => Some("alerts"),
+        "maintenance_ticket" => Some("maintenance_tickets"),
+        "decision_snapshot" => Some("decision_snapshots"),
+        "execution_plan" => Some("execution_plans"),
+        "operator_imei_event" => Some("operator_imei_events"),
+        "workspace_template" => Some("workspace_templates"),
         _ => None,
     }
 }
@@ -114,9 +132,16 @@ async fn record_exists(
         "decision_snapshot" => "decision_snapshots",
         "execution_plan" => "execution_plans",
         "operator_imei_event" => "operator_imei_events",
+        "workspace_template" => "workspace_templates",
         _ => return Ok(false),
     };
-    let query = format!("SELECT EXISTS (SELECT 1 FROM {} WHERE id = $1)", table);
+    if entity_type == "workspace_template" {
+        return Ok(false);
+    }
+    let query = format!(
+        "SELECT EXISTS (SELECT 1 FROM {} WHERE id = $1 AND archived_at IS NULL)",
+        table
+    );
     sqlx::query_as::<_, (bool,)>(&query)
         .bind(entity_id)
         .fetch_one(pool)
@@ -801,6 +826,143 @@ pub(crate) async fn upload_evidence(
             HttpResponse::InternalServerError().finish()
         }
     }
+}
+
+#[patch("/api/entities/{entity_type}/{id}/archive")]
+pub(crate) async fn archive_entity(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(String, String)>,
+    payload: web::Json<ArchiveRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let (raw_entity_type, raw_id) = path.into_inner();
+    let Some(entity_type) = normalize_entity_type(&raw_entity_type) else {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Unsupported archive entity type.".into(),
+        });
+    };
+    let Some(table) = archive_table_for_entity(entity_type) else {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "This record type cannot be archived through governance.".into(),
+        });
+    };
+    let reason = payload
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Archived through governance workflow.");
+
+    let rows_affected = if entity_type == "workspace_template" {
+        let query = format!(
+            r#"
+            UPDATE {}
+            SET archived_at = COALESCE(archived_at, NOW()),
+                archived_by = COALESCE(archived_by, $2),
+                archive_reason = COALESCE(archive_reason, $3),
+                active = FALSE,
+                updated_at = NOW()
+            WHERE id = $1 AND archived_at IS NULL
+            "#,
+            table
+        );
+        match sqlx::query(&query)
+            .bind(&raw_id)
+            .bind(&context.actor)
+            .bind(reason)
+            .execute(pool.get_ref())
+            .await
+        {
+            Ok(result) => result.rows_affected(),
+            Err(err) => {
+                eprintln!("Failed to archive template: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    } else {
+        let Ok(entity_id) = raw_id.parse::<i64>() else {
+            return HttpResponse::BadRequest().json(ApiError {
+                message: "Archive entity id must be numeric.".into(),
+            });
+        };
+        let query = format!(
+            r#"
+            UPDATE {}
+            SET archived_at = COALESCE(archived_at, NOW()),
+                archived_by = COALESCE(archived_by, $2),
+                archive_reason = COALESCE(archive_reason, $3)
+            WHERE id = $1 AND archived_at IS NULL
+            "#,
+            table
+        );
+        match sqlx::query(&query)
+            .bind(entity_id)
+            .bind(&context.actor)
+            .bind(reason)
+            .execute(pool.get_ref())
+            .await
+        {
+            Ok(result) => {
+                if result.rows_affected() > 0 {
+                    if let Err(err) = record_custom_audit_event(
+                        pool.get_ref(),
+                        entity_type,
+                        entity_id,
+                        "archived_at",
+                        None,
+                        Some("archived"),
+                        &context.actor,
+                        Some(reason),
+                    )
+                    .await
+                    {
+                        eprintln!("Failed to audit archive action: {}", err);
+                        return HttpResponse::InternalServerError().finish();
+                    }
+                }
+                result.rows_affected()
+            }
+            Err(err) => {
+                eprintln!("Failed to archive entity: {}", err);
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    };
+
+    if rows_affected == 0 {
+        return HttpResponse::NotFound().json(ApiError {
+            message: "Record not found or already archived.".into(),
+        });
+    }
+
+    if entity_type == "workspace_template" {
+        if let Err(err) = record_custom_audit_event(
+            pool.get_ref(),
+            entity_type,
+            0,
+            "archived_at",
+            None,
+            Some(&raw_id),
+            &context.actor,
+            Some(reason),
+        )
+        .await
+        {
+            eprintln!("Failed to audit template archive action: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+
+    HttpResponse::Ok().json(ArchiveResponse {
+        entity_type: entity_type.into(),
+        entity_id: raw_id,
+        archived: true,
+        message: "Record archived and audit event written.".into(),
+    })
 }
 
 #[get("/api/stats")]

@@ -54,66 +54,8 @@ let imeiCompliance = null;
 let priorityZones = [];
 let selectedArea = null;
 let currentMatrixRows = [];
+let workspaceTemplates = [];
 let authSession = JSON.parse(localStorage.getItem('kkEvoAuth') || 'null');
-
-const workspaceTemplates = [
-  {
-    id: 'council-water',
-    title: 'Council water reliability pilot',
-    orgType: 'municipal_council',
-    sector: 'water',
-    siteType: 'water_cluster',
-    formType: 'gps_photo_survey',
-    trustSignal: 'council_agent_verified',
-    projectName: 'Water reliability validation pilot',
-    siteName: 'Priority water cluster',
-    campaignName: 'Water access GPS/photo baseline',
-    decisionTitle: 'Approve water reliability sprint',
-    rationale: 'Municipal councils need visible proof, beneficiary reach, and quick maintenance wins before larger budget commitment.',
-  },
-  {
-    id: 'ngo-inclusion',
-    title: 'NGO digital inclusion baseline',
-    orgType: 'ngo',
-    sector: 'connectivity',
-    siteType: 'public_asset',
-    formType: 'phone_ownership_baseline',
-    trustSignal: 'gps_photo_verified',
-    projectName: 'Digital inclusion baseline',
-    siteName: 'Community access point',
-    campaignName: 'Phone access and signal baseline',
-    decisionTitle: 'Approve inclusion baseline',
-    rationale: 'NGO programs need gender-aware, offline-capable survey evidence before device, training, or connectivity spend.',
-  },
-  {
-    id: 'clinic-solar',
-    title: 'Clinic solar uptime monitoring',
-    orgType: 'solar_operator',
-    sector: 'solar',
-    siteType: 'clinic',
-    formType: 'asset_condition',
-    trustSignal: 'clinic_staff_verified',
-    projectName: 'Clinic solar uptime monitoring',
-    siteName: 'Clinic energy site',
-    campaignName: 'Clinic power and phone access survey',
-    decisionTitle: 'Approve clinic uptime monitoring',
-    rationale: 'Clinics need uptime evidence, local staff validation, and maintenance SLAs that survive low-connectivity conditions.',
-  },
-  {
-    id: 'telecom-probe',
-    title: 'Telecom signal probe rollout',
-    orgType: 'telecom',
-    sector: 'connectivity',
-    siteType: 'tower',
-    formType: 'signal_check',
-    trustSignal: 'gps_photo_verified',
-    projectName: 'Signal probe expansion pilot',
-    siteName: 'Priority signal probe site',
-    campaignName: 'Evening signal quality campaign',
-    decisionTitle: 'Approve signal probe rollout',
-    rationale: 'Telecom partners need demand, weak-signal, and population proof before probe or tower-adjacent investments.',
-  },
-];
 
 function authHeaders() {
   if (!authSession?.token) return {};
@@ -1244,13 +1186,14 @@ function renderWorkspaces() {
 
   const templatesTarget = document.getElementById('workspace-templates');
   if (templatesTarget) {
-    templatesTarget.innerHTML = workspaceTemplates.map(template => `
+    templatesTarget.innerHTML = workspaceTemplates.length ? workspaceTemplates.map(template => `
       <button class="template-card workspace-template" data-template="${escapeHtml(template.id)}">
-        <span>${escapeHtml(template.orgType.replaceAll('_', ' '))}</span>
+        <span>${escapeHtml(template.org_type.replaceAll('_', ' '))}</span>
         <strong>${escapeHtml(template.title)}</strong>
-        <small>${escapeHtml(template.rationale)}</small>
+        <small>${escapeHtml(template.description)}</small>
+        <small>${escapeHtml((template.required_evidence || []).join(' / '))}</small>
       </button>
-    `).join('');
+    `).join('') : '<div class="empty-state">No backend templates are active.</div>';
   }
 
   const siteRows = workspaceDashboard?.site_intelligence || sites.map(site => ({ site }));
@@ -2075,13 +2018,22 @@ function renderAlerts() {
 }
 
 function renderPriority() {
-  document.getElementById('priority-list').innerHTML = priorityZones.slice(0, 18).map(zone => `
-    <article class="list-card clickable-card priority-zone-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(zone))}">
+  document.getElementById('priority-list').innerHTML = priorityZones.slice(0, 18).map(zone => {
+    const tone = priorityZoneTone(zone);
+    return `
+    <article class="list-card clickable-card priority-zone-card priority-zone-${tone}" role="button" tabindex="0" data-key="${escapeHtml(areaKey(zone))}">
       <div><strong>${escapeHtml(zone.commune)}</strong><span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)} &middot; ${formatNumber(zone.population)} people</span></div>
-      <span class="priority-badge priority-${escapeHtml(zone.priority_label.toLowerCase())}">${escapeHtml(zone.priority_label)} ${zone.priority_score.toFixed(0)}</span>
-      <p>${zone.open_alert_count} open alerts &middot; ${zone.asset_count} monitored assets &middot; ${zone.report_count} field reports &middot; ${formatRate(zone.phone_rate)} phone ownership</p>
+      <span class="priority-badge priority-${escapeHtml(tone)}">${tone === 'high' ? 'RED ALERT' : escapeHtml(zone.priority_label)} ${zone.priority_score.toFixed(0)}</span>
+      <p class="priority-alert-line">${escapeHtml(priorityZoneAlert(zone))}</p>
+      <div class="priority-signal-grid">
+        <div><span>Open alerts</span><strong>${zone.open_alert_count}</strong></div>
+        <div><span>Assets</span><strong>${zone.asset_count}</strong></div>
+        <div><span>Reports</span><strong>${zone.report_count}</strong></div>
+        <div><span>Phone rate</span><strong>${formatRate(zone.phone_rate)}</strong></div>
+      </div>
     </article>
-  `).join('');
+  `;
+  }).join('');
 
   document.querySelectorAll('.priority-zone-card').forEach(card => {
     const open = () => {
@@ -2129,6 +2081,24 @@ function renderOverviewAlerts() {
       }
     });
   });
+}
+
+function priorityZoneTone(zone) {
+  const label = String(zone.priority_label || 'Watch').toLowerCase();
+  if (label === 'high' || Number(zone.priority_score || 0) >= 52) return 'high';
+  if (label === 'medium' || Number(zone.priority_score || 0) >= 38) return 'medium';
+  return 'watch';
+}
+
+function priorityZoneAlert(zone) {
+  const tone = priorityZoneTone(zone);
+  if (tone === 'high') {
+    return `Red alert: ${zone.open_alert_count} open alerts and ${Math.round(zone.confidence * 100)}% confidence require immediate field action.`;
+  }
+  if (tone === 'medium') {
+    return `Watch closely: strengthen evidence before this area becomes a red alert.`;
+  }
+  return `Monitor: keep telemetry and field reports current.`;
 }
 
 function campaignStatusActions(campaign) {
@@ -2267,16 +2237,20 @@ function renderOverviewTickets() {
 function renderOverviewPriority() {
   const target = document.getElementById('overview-priority');
   if (!target) return;
-  target.innerHTML = priorityZones.slice(0, 5).map(zone => `
-    <article class="compact-card clickable-card overview-priority-card" role="button" tabindex="0" data-key="${escapeHtml(areaKey(zone))}">
+  target.innerHTML = priorityZones.slice(0, 5).map(zone => {
+    const tone = priorityZoneTone(zone);
+    return `
+    <article class="compact-card clickable-card overview-priority-card priority-zone-${tone}" role="button" tabindex="0" data-key="${escapeHtml(areaKey(zone))}">
       <div>
         <strong>${escapeHtml(zone.commune)}</strong>
         <span>${escapeHtml(zone.department)}, ${escapeHtml(zone.region)}</span>
       </div>
-      <span class="priority-badge priority-${escapeHtml(zone.priority_label.toLowerCase())}">${zone.priority_score.toFixed(0)}</span>
+      <span class="priority-badge priority-${escapeHtml(tone)}">${tone === 'high' ? 'ALERT' : zone.priority_score.toFixed(0)}</span>
+      <p class="priority-alert-line">${escapeHtml(priorityZoneAlert(zone))}</p>
       <p>${formatNumber(zone.population)} people &middot; ${formatRate(zone.phone_rate)} phone ownership &middot; ${Math.round(zone.confidence * 100)}% confidence</p>
     </article>
-  `).join('');
+  `;
+  }).join('');
 
   document.querySelectorAll('.overview-priority-card').forEach(card => {
     const open = () => {
@@ -2683,48 +2657,6 @@ function applyWorkspaceTemplate(templateId) {
   }).then(async result => {
     await refreshAfterBackendAction(`${result.message} Ensured: ${(result.created || []).join(', ')}.`, 'workspaces');
   }).catch(error => setStatus(dataStatus, error.message, 'danger'));
-  return;
-
-  document.getElementById('organizationType').value = template.orgType;
-  document.getElementById('organizationName').value = `${template.title} client`;
-  document.getElementById('organizationContactName').value = 'Field operations lead';
-
-  document.getElementById('projectName').value = template.projectName;
-  document.getElementById('projectSector').value = template.sector;
-  document.getElementById('projectRegion').value = focusArea?.region || focusRegion;
-  document.getElementById('projectStatus').value = 'planning';
-
-  document.getElementById('siteName').value = focusArea ? `${focusArea.commune} ${template.siteName}` : template.siteName;
-  document.getElementById('siteType').value = template.siteType;
-  document.getElementById('siteRegion').value = focusArea?.region || focusRegion;
-  document.getElementById('siteDepartment').value = focusArea?.department || '';
-  document.getElementById('siteCommune').value = focusArea?.commune || '';
-  document.getElementById('siteLatitude').value = focusArea ? formatCoordinate(focusArea.latitude) : '';
-  document.getElementById('siteLongitude').value = focusArea ? formatCoordinate(focusArea.longitude) : '';
-  document.getElementById('siteBeneficiaries').value = focusArea?.population || '';
-  document.getElementById('siteTrustSignal').value = template.trustSignal;
-  document.getElementById('siteAccessNotes').value = focusArea
-    ? `Use local trusted contact and collect GPS/photo proof for ${focusArea.commune}.`
-    : 'Use local trusted contact and collect GPS/photo proof.';
-
-  document.getElementById('campaignName').value = focusArea ? `${focusArea.commune} ${template.campaignName}` : template.campaignName;
-  document.getElementById('campaignFormType').value = template.formType;
-  document.getElementById('campaignRegion').value = focusArea?.region || focusRegion;
-  document.getElementById('campaignDepartment').value = focusArea?.department || '';
-  document.getElementById('campaignCommune').value = focusArea?.commune || '';
-  document.getElementById('campaignLanguage').value = 'bilingual';
-  document.getElementById('campaignStatus').value = 'draft';
-  document.getElementById('campaignOffline').checked = true;
-
-  document.getElementById('decisionTitle').value = focusArea ? `${focusArea.commune}: ${template.decisionTitle}` : template.decisionTitle;
-  document.getElementById('decisionStage').value = 'recommended';
-  document.getElementById('decisionScore').value = focusArea ? (priorityForArea(focusArea)?.priority_score || 50).toFixed(0) : '';
-  document.getElementById('decisionBudget').value = focusArea ? estimateBudgetXaf(focusArea) : '';
-  document.getElementById('decisionOwner').value = 'Field operations lead';
-  document.getElementById('decisionEvidence').value = focusArea ? Math.round(focusArea.confidence * 55) : '';
-  document.getElementById('decisionRationale').value = focusArea ? `${template.rationale} ${focusArea.commune} adds ${formatNumber(focusArea.population)} people and ${formatRate(focusArea.phone_rate)} estimated phone ownership.` : template.rationale;
-  document.getElementById('decisionNextAction').value = focusArea ? areaActionText(focusArea, localContextForArea(focusArea)) : 'Validate site, launch campaign, then approve first execution sprint.';
-  document.getElementById('organizationName').focus();
 }
 
 function prepareAreaAction(action, area) {
@@ -2969,11 +2901,12 @@ async function refreshData() {
   refreshButton.disabled = true;
   setStatus(dataStatus, 'Loading KK Evo intelligence layers...', 'info');
   try {
-    const [summary, overviewData, phoneMatrixData, workspaceData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, imeiData, priorityData, decisionData] = await Promise.all([
+    const [summary, overviewData, phoneMatrixData, workspaceData, templateData, orgData, projectData, siteData, campaignData, snapshotData, decisionBoardData, executionBoardData, assetData, probeData, reportData, alertData, ticketData, readingData, imeiData, priorityData, decisionData] = await Promise.all([
       fetchJson('/api/summary'),
       fetchJson('/api/overview'),
       fetchJson('/api/phone-matrix'),
       fetchJson('/api/workspaces/dashboard'),
+      fetchJson('/api/workspace-templates'),
       fetchJson('/api/organizations'),
       fetchJson('/api/projects'),
       fetchJson('/api/site-profiles'),
@@ -2996,6 +2929,7 @@ async function refreshData() {
     nationalSummary = summary;
     overviewIntelligence = overviewData;
     workspaceDashboard = workspaceData;
+    workspaceTemplates = templateData;
     organizations = orgData;
     projects = projectData;
     sites = siteData;

@@ -20,6 +20,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
         .service(update_stats)
         .service(workspace_dashboard)
         .service(run_area_action)
+        .service(list_workspace_templates)
         .service(apply_workspace_template)
         .service(ops_status_fragment)
         .service(workspace_activity_fragment)

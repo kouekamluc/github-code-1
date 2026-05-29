@@ -1008,6 +1008,17 @@ pub(crate) async fn run_area_action(
     }
 }
 
+#[get("/api/workspace-templates")]
+pub(crate) async fn list_workspace_templates(pool: web::Data<PgPool>) -> impl Responder {
+    match fetch_workspace_templates(pool.get_ref()).await {
+        Ok(templates) => HttpResponse::Ok().json(templates),
+        Err(err) => {
+            eprintln!("Failed to query workspace templates: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
 #[post("/api/workspace-templates/apply")]
 pub(crate) async fn apply_workspace_template(
     request: HttpRequest,
@@ -1018,46 +1029,18 @@ pub(crate) async fn apply_workspace_template(
         return response;
     }
 
-    let (title, org_type, sector, site_type, form_type, trust_signal) =
-        match payload.template_id.as_str() {
-            "council-water" => (
-                "Council water reliability pilot",
-                "municipal_council",
-                "water",
-                "water_cluster",
-                "gps_photo_survey",
-                "council_agent_verified",
-            ),
-            "ngo-inclusion" => (
-                "NGO digital inclusion baseline",
-                "ngo",
-                "connectivity",
-                "public_asset",
-                "phone_ownership_baseline",
-                "gps_photo_verified",
-            ),
-            "clinic-solar" => (
-                "Clinic solar uptime monitoring",
-                "solar_operator",
-                "solar",
-                "clinic",
-                "asset_condition",
-                "clinic_staff_verified",
-            ),
-            "telecom-probe" => (
-                "Telecom signal probe rollout",
-                "telecom",
-                "connectivity",
-                "telecom_probe_site",
-                "signal_check",
-                "gps_photo_verified",
-            ),
-            _ => {
-                return HttpResponse::BadRequest().json(ApiError {
-                    message: "Unknown workspace template.".into(),
-                })
-            }
-        };
+    let template = match fetch_workspace_template(pool.get_ref(), &payload.template_id).await {
+        Ok(Some(template)) => template,
+        Ok(None) => {
+            return HttpResponse::BadRequest().json(ApiError {
+                message: "Unknown workspace template.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to load workspace template: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
 
     let area = if let (Some(region), Some(department), Some(commune)) = (
         payload.region.as_deref(),
@@ -1090,8 +1073,8 @@ pub(crate) async fn apply_workspace_template(
         });
     };
 
-    let org_name = format!("{} client", title);
-    let project_name = format!("{} - {}", title, area.commune);
+    let org_name = format!("{} client", template.title);
+    let project_name = format!("{} - {}", template.title, area.commune);
     let org_id = match sqlx::query_as::<_, (i64,)>(
         r#"
         INSERT INTO organizations (name, org_type, contact_name, contact_email)
@@ -1102,7 +1085,7 @@ pub(crate) async fn apply_workspace_template(
         "#,
     )
     .bind(&org_name)
-    .bind(org_type)
+    .bind(&template.org_type)
     .fetch_one(pool.get_ref())
     .await
     {
@@ -1118,19 +1101,26 @@ pub(crate) async fn apply_workspace_template(
         INSERT INTO projects (
             organization_id, name, sector, region, status, language_mode,
             channel_strategy, target_segment, start_date
-        ) VALUES ($1, $2, $3, $4, 'planning', 'bilingual', 'field_team_whatsapp_sms', 'council_ngo_operator', CURRENT_DATE)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_DATE)
         ON CONFLICT (organization_id, name)
         DO UPDATE SET
             sector = EXCLUDED.sector,
             region = EXCLUDED.region,
-            status = EXCLUDED.status
+            status = EXCLUDED.status,
+            language_mode = EXCLUDED.language_mode,
+            channel_strategy = EXCLUDED.channel_strategy,
+            target_segment = EXCLUDED.target_segment
         RETURNING id
         "#,
     )
     .bind(org_id)
     .bind(&project_name)
-    .bind(sector)
+    .bind(&template.sector)
     .bind(&area.region)
+    .bind(&template.default_project_status)
+    .bind(&template.language_mode)
+    .bind(&template.channel_strategy)
+    .bind(&template.target_segment)
     .fetch_one(pool.get_ref())
     .await
     {
@@ -1145,6 +1135,7 @@ pub(crate) async fn apply_workspace_template(
         format!("organization: {}", org_name),
         format!("project: {}", project_name),
     ];
+    let site_name = format!("{} {}", area.commune, template.site_type.replace('_', " "));
     if let Err(err) = sqlx::query(
         r#"
         INSERT INTO site_profiles (
@@ -1160,18 +1151,20 @@ pub(crate) async fn apply_workspace_template(
         "#,
     )
     .bind(project_id)
-    .bind(format!("{} {}", area.commune, site_type.replace('_', " ")))
-    .bind(site_type)
+    .bind(&site_name)
+    .bind(&template.site_type)
     .bind(&area.region)
     .bind(&area.department)
     .bind(&area.commune)
     .bind(area.latitude)
     .bind(area.longitude)
     .bind(area.population)
-    .bind(trust_signal)
+    .bind(&template.trust_signal)
     .bind(format!(
-        "{} template created for {}. Collect GPS/photo proof and named focal point.",
-        title, area.commune
+        "{} template created for {}. Required evidence: {}.",
+        template.title,
+        area.commune,
+        template.required_evidence.join(", ")
     ))
     .execute(pool.get_ref())
     .await
@@ -1179,46 +1172,58 @@ pub(crate) async fn apply_workspace_template(
         eprintln!("Failed to apply template site: {}", err);
         return HttpResponse::InternalServerError().finish();
     }
-    created.push(format!("template site type: {}", site_type));
+    created.push(format!("template site type: {}", template.site_type));
 
     if let Err(err) = sqlx::query(
         r#"
         INSERT INTO survey_campaigns (
             project_id, name, form_type, target_region, target_department,
             target_commune, status, language_mode, offline_enabled, starts_on, ends_on
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'draft', 'bilingual', TRUE, CURRENT_DATE, CURRENT_DATE + INTERVAL '21 days')
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, CURRENT_DATE, CURRENT_DATE + INTERVAL '21 days')
         ON CONFLICT (project_id, name)
         DO UPDATE SET
             form_type = EXCLUDED.form_type,
-            offline_enabled = TRUE,
+            language_mode = EXCLUDED.language_mode,
+            offline_enabled = EXCLUDED.offline_enabled,
             ends_on = EXCLUDED.ends_on
         "#,
     )
     .bind(project_id)
-    .bind(format!("{} {}", area.commune, form_type.replace('_', " ")))
-    .bind(form_type)
+    .bind(format!("{} {}", area.commune, template.form_type.replace('_', " ")))
+    .bind(&template.form_type)
     .bind(&area.region)
     .bind(&area.department)
     .bind(&area.commune)
+    .bind(&template.language_mode)
+    .bind(template.offline_enabled)
     .execute(pool.get_ref())
     .await
     {
         eprintln!("Failed to apply template campaign: {}", err);
         return HttpResponse::InternalServerError().finish();
     }
-    created.push(format!("template campaign: {}", form_type));
+    created.push(format!("template campaign: {}", template.form_type));
 
-    match ensure_area_action(pool.get_ref(), "decision", &area, Some(project_id)).await {
-        Ok(mut action_created) => created.append(&mut action_created),
-        Err(err) => {
-            eprintln!("Failed to apply template decision: {}", err);
-            return HttpResponse::InternalServerError().finish();
+    for action in template.default_actions.iter() {
+        if matches!(action.as_str(), "site" | "campaign") {
+            continue;
+        }
+        match ensure_area_action(pool.get_ref(), action, &area, Some(project_id)).await {
+            Ok(mut action_created) => created.append(&mut action_created),
+            Err(err) => {
+                eprintln!("Failed to apply template action '{}': {}", action, err);
+                return HttpResponse::InternalServerError().finish();
+            }
         }
     }
+    created.push(format!(
+        "required evidence: {}",
+        template.required_evidence.join(", ")
+    ));
 
     match build_workspace_dashboard(pool.get_ref()).await {
         Ok(dashboard) => HttpResponse::Ok().json(ActionResult {
-            message: format!("Template '{}' applied to {}.", title, area.commune),
+            message: format!("Template '{}' applied to {}.", template.title, area.commune),
             created,
             dashboard,
         }),

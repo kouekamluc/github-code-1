@@ -343,6 +343,79 @@ pub(crate) async fn fetch_evidence_files(
     .await
 }
 
+pub(crate) async fn fetch_workspace_templates(
+    pool: &PgPool,
+) -> Result<Vec<WorkspaceTemplate>, sqlx::Error> {
+    sqlx::query_as::<_, WorkspaceTemplate>(
+        r#"
+        SELECT
+            id,
+            title,
+            description,
+            org_type,
+            sector,
+            site_type,
+            form_type,
+            trust_signal,
+            default_project_status,
+            language_mode,
+            offline_enabled,
+            channel_strategy,
+            target_segment,
+            default_actions,
+            required_evidence,
+            creates_asset,
+            creates_report_task,
+            creates_alert,
+            creates_ticket,
+            active,
+            sort_order
+        FROM workspace_templates
+        WHERE active = TRUE
+        ORDER BY sort_order ASC, title ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub(crate) async fn fetch_workspace_template(
+    pool: &PgPool,
+    template_id: &str,
+) -> Result<Option<WorkspaceTemplate>, sqlx::Error> {
+    sqlx::query_as::<_, WorkspaceTemplate>(
+        r#"
+        SELECT
+            id,
+            title,
+            description,
+            org_type,
+            sector,
+            site_type,
+            form_type,
+            trust_signal,
+            default_project_status,
+            language_mode,
+            offline_enabled,
+            channel_strategy,
+            target_segment,
+            default_actions,
+            required_evidence,
+            creates_asset,
+            creates_report_task,
+            creates_alert,
+            creates_ticket,
+            active,
+            sort_order
+        FROM workspace_templates
+        WHERE id = $1 AND active = TRUE
+        "#,
+    )
+    .bind(template_id)
+    .fetch_optional(pool)
+    .await
+}
+
 pub(crate) fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()

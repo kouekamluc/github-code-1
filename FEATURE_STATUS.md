@@ -1,6 +1,6 @@
 # Feature Status And Implementation Plan
 
-Last checked: 2026-05-27
+Last checked: 2026-05-29
 
 ## End-To-End Status
 
@@ -19,6 +19,7 @@ Run the same check with:
 | Public cockpit | Working | Summary, overview KPIs, risks, next actions | Add configurable tenant/client views |
 | Phone matrix | Working | Matrix, assumptions, area detail, recalculation endpoint | Add source versioning and admin review for manual overrides |
 | Workspace management | Working | Organization, project, dashboard, readiness cards | Add tenant isolation and workspace-level permissions |
+| Workspace templates | Working backend-owned core | Template registry loads from backend and applying each template creates persisted workspace/site/campaign/action records | Add admin template editor, template version history, and per-tenant template visibility |
 | Site profiles | Working | Site creation/edit linked to project, detail drawer, area dossier | Add duplicate review and map-assisted site placement |
 | Survey campaigns | Working core | Campaign create and status transition | Implement form builder, offline submissions, photos, and field-agent assignments |
 | Signal probes/assets | Working core | Asset create/edit, linked site/project, detail drawer, evidence upload, status workflow | Add device registry keys, heartbeat rules, and heartbeat alerting |
@@ -39,10 +40,10 @@ Run the same check with:
 
 ### Phase 1: Make Existing Core Workflows Product-Complete
 
-1. Add detail pages/drawers for project, site, campaign, asset, report, alert, ticket, decision, execution plan, and IMEI event records.
-2. Add edit/update endpoints for non-status fields so records are not create-only after initial submission.
-3. Add delete/archive semantics for mistakes, using soft-delete or archived status where operational history matters.
-4. Add the audit-log UI and show record history inside detail pages.
+1. Add delete/archive semantics for mistakes, using soft-delete or archived status where operational history matters.
+2. Add the standalone audit-log UI and export filters.
+3. Add admin editing for backend workspace templates.
+4. Add browser-critical regression tests for detail drawers, template cards, and priority alerts.
 
 ### Phase 2: Evidence And Field Operations
 
@@ -69,4 +70,4 @@ Run the same check with:
 
 ## Current Priority Recommendation
 
-The app is past demo-only backend wiring for the core flow. The next normal implementation step should be detail/edit pages plus evidence uploads, because those two unlock real operational use: people can inspect a record, correct it, attach proof, and follow the history from intake to decision to execution.
+The app is past demo-only backend wiring for the core flow. The next normal implementation step should be archive/delete semantics plus admin template editing, because records and templates are now persisted but still need controlled correction and governance flows.

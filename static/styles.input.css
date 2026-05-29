@@ -906,6 +906,85 @@
     border-left-color: #667085;
   }
 
+  .priority-zone-card,
+  .overview-priority-card {
+    position: relative;
+  }
+
+  .priority-zone-card::before,
+  .overview-priority-card::before {
+    @apply absolute left-0 top-0 h-full w-1;
+    content: "";
+  }
+
+  .priority-zone-high {
+    border-color: rgba(180, 35, 24, 0.42);
+    background: linear-gradient(90deg, rgba(180, 35, 24, 0.10), #ffffff 34%);
+    box-shadow: 0 14px 32px rgba(180, 35, 24, 0.14);
+  }
+
+  .priority-zone-high::before {
+    background: var(--rose);
+  }
+
+  .priority-zone-medium {
+    border-color: rgba(183, 121, 31, 0.34);
+    background: linear-gradient(90deg, rgba(183, 121, 31, 0.10), #ffffff 34%);
+  }
+
+  .priority-zone-medium::before {
+    background: var(--amber);
+  }
+
+  .priority-zone-watch::before {
+    background: var(--teal);
+  }
+
+  .priority-alert-line {
+    @apply col-span-full rounded-md border px-3 py-2 text-sm font-black;
+    border-color: rgba(102, 112, 133, 0.14);
+    background: #f8fafc;
+    color: var(--muted);
+  }
+
+  .priority-zone-high .priority-alert-line {
+    border-color: rgba(180, 35, 24, 0.24);
+    background: var(--rose-soft);
+    color: var(--rose);
+  }
+
+  .priority-zone-medium .priority-alert-line {
+    border-color: rgba(183, 121, 31, 0.24);
+    background: var(--amber-soft);
+    color: #92400e;
+  }
+
+  .priority-signal-grid {
+    @apply col-span-full grid gap-2;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .priority-signal-grid div {
+    @apply rounded-md border px-3 py-2;
+    background: rgba(255, 255, 255, 0.78);
+    border-color: var(--line-soft);
+  }
+
+  .priority-signal-grid span,
+  .priority-signal-grid strong {
+    @apply block;
+  }
+
+  .priority-signal-grid span {
+    @apply text-xs font-black uppercase;
+    color: var(--muted);
+  }
+
+  .priority-signal-grid strong {
+    @apply mt-1 text-base font-black;
+    color: var(--ink);
+  }
+
   .confidence-pill,
   .priority-badge,
   .status-pill {

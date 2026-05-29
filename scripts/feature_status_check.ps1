@@ -74,6 +74,16 @@ $authHeaders = @{}
 if ($login.token) { $authHeaders["x-kk-session"] = $login.token }
 Invoke-FeatureApi GET "/api/auth/context" "Authentication" "session context" $null $authHeaders | Out-Null
 
+$templates = Invoke-FeatureApi GET "/api/workspace-templates" "Workspace templates" "backend template registry readable"
+foreach ($template in @($templates)) {
+  Invoke-FeatureApi POST "/api/workspace-templates/apply" "Workspace templates" "apply $($template.id)" @{
+    template_id = $template.id
+    region = "Littoral"
+    department = "Moungo"
+    commune = "Bare-Bakem"
+  } $authHeaders | Out-Null
+}
+
 $orgs = Invoke-FeatureApi POST "/api/organizations" "Workspaces" "create organization" @{
   name = "Codex audit org $run"
   org_type = "ngo"

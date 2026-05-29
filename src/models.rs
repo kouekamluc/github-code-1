@@ -869,6 +869,31 @@ pub(crate) struct WorkspaceTemplateApplyRequest {
     pub(crate) commune: Option<String>,
 }
 
+#[derive(Serialize, FromRow, Clone)]
+pub(crate) struct WorkspaceTemplate {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) org_type: String,
+    pub(crate) sector: String,
+    pub(crate) site_type: String,
+    pub(crate) form_type: String,
+    pub(crate) trust_signal: String,
+    pub(crate) default_project_status: String,
+    pub(crate) language_mode: String,
+    pub(crate) offline_enabled: bool,
+    pub(crate) channel_strategy: String,
+    pub(crate) target_segment: String,
+    pub(crate) default_actions: Vec<String>,
+    pub(crate) required_evidence: Vec<String>,
+    pub(crate) creates_asset: bool,
+    pub(crate) creates_report_task: bool,
+    pub(crate) creates_alert: bool,
+    pub(crate) creates_ticket: bool,
+    pub(crate) active: bool,
+    pub(crate) sort_order: i32,
+}
+
 #[derive(Serialize)]
 pub(crate) struct ActionResult {
     pub(crate) message: String,

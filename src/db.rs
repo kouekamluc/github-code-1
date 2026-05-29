@@ -127,6 +127,33 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        CREATE TABLE IF NOT EXISTS workspace_templates (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            org_type TEXT NOT NULL,
+            sector TEXT NOT NULL,
+            site_type TEXT NOT NULL,
+            form_type TEXT NOT NULL,
+            trust_signal TEXT NOT NULL,
+            default_project_status TEXT NOT NULL DEFAULT 'planning',
+            language_mode TEXT NOT NULL DEFAULT 'bilingual',
+            offline_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            channel_strategy TEXT NOT NULL DEFAULT 'field_team_whatsapp_sms',
+            target_segment TEXT NOT NULL DEFAULT 'council_ngo_operator',
+            default_actions TEXT[] NOT NULL DEFAULT ARRAY['site', 'campaign', 'decision']::TEXT[],
+            required_evidence TEXT[] NOT NULL DEFAULT ARRAY['gps_photo', 'local_focal_point']::TEXT[],
+            creates_asset BOOLEAN NOT NULL DEFAULT FALSE,
+            creates_report_task BOOLEAN NOT NULL DEFAULT FALSE,
+            creates_alert BOOLEAN NOT NULL DEFAULT FALSE,
+            creates_ticket BOOLEAN NOT NULL DEFAULT FALSE,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order INTEGER NOT NULL DEFAULT 100,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+        r#"
         CREATE TABLE IF NOT EXISTS decision_snapshots (
             id BIGSERIAL PRIMARY KEY,
             project_id BIGINT REFERENCES projects(id) ON DELETE SET NULL,
@@ -395,6 +422,24 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS uploaded_by TEXT NOT NULL DEFAULT 'system'
         "#,
+        r#"
+        ALTER TABLE workspace_templates
+        ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
+        ADD COLUMN IF NOT EXISTS default_project_status TEXT NOT NULL DEFAULT 'planning',
+        ADD COLUMN IF NOT EXISTS language_mode TEXT NOT NULL DEFAULT 'bilingual',
+        ADD COLUMN IF NOT EXISTS offline_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        ADD COLUMN IF NOT EXISTS channel_strategy TEXT NOT NULL DEFAULT 'field_team_whatsapp_sms',
+        ADD COLUMN IF NOT EXISTS target_segment TEXT NOT NULL DEFAULT 'council_ngo_operator',
+        ADD COLUMN IF NOT EXISTS default_actions TEXT[] NOT NULL DEFAULT ARRAY['site', 'campaign', 'decision']::TEXT[],
+        ADD COLUMN IF NOT EXISTS required_evidence TEXT[] NOT NULL DEFAULT ARRAY['gps_photo', 'local_focal_point']::TEXT[],
+        ADD COLUMN IF NOT EXISTS creates_asset BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS creates_report_task BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS creates_alert BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS creates_ticket BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE,
+        ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 100,
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        "#,
     ];
 
     for statement in compatibility_schema {
@@ -415,6 +460,130 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         r#"
         CREATE INDEX IF NOT EXISTS evidence_files_entity_idx
         ON evidence_files(entity_type, entity_id, created_at DESC)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO workspace_templates (
+            id, title, description, org_type, sector, site_type, form_type,
+            trust_signal, default_project_status, language_mode, offline_enabled,
+            channel_strategy, target_segment, default_actions, required_evidence,
+            creates_asset, creates_report_task, creates_alert, creates_ticket, sort_order
+        ) VALUES
+            (
+                'council-water',
+                'Council water reliability pilot',
+                'Municipal water validation with GPS/photo proof, local focal point, first report task, and follow-up ticket.',
+                'municipal_council',
+                'water',
+                'water_cluster',
+                'gps_photo_survey',
+                'council_agent_verified',
+                'planning',
+                'bilingual',
+                TRUE,
+                'field_team_whatsapp_sms',
+                'municipal_water_users',
+                ARRAY['site', 'campaign', 'probe', 'report', 'alert', 'ticket', 'decision']::TEXT[],
+                ARRAY['gps_photo', 'water_point_condition', 'local_focal_point', 'beneficiary_count']::TEXT[],
+                TRUE,
+                TRUE,
+                TRUE,
+                TRUE,
+                10
+            ),
+            (
+                'ngo-inclusion',
+                'NGO digital inclusion baseline',
+                'Offline phone ownership and inclusion baseline with bilingual survey, site proof, and decision-ready evidence.',
+                'ngo',
+                'connectivity',
+                'public_asset',
+                'phone_ownership_baseline',
+                'gps_photo_verified',
+                'planning',
+                'bilingual',
+                TRUE,
+                'offline_forms_sms_whatsapp',
+                'youth_women_community_groups',
+                ARRAY['site', 'campaign', 'report', 'decision']::TEXT[],
+                ARRAY['phone_ownership_sample', 'gps_photo', 'gender_inclusion_notes', 'local_focal_point']::TEXT[],
+                FALSE,
+                TRUE,
+                FALSE,
+                FALSE,
+                20
+            ),
+            (
+                'clinic-solar',
+                'Clinic solar uptime monitoring',
+                'Clinic energy monitoring workspace with health probe, exception alert, technician follow-up, and uptime evidence.',
+                'solar_operator',
+                'solar',
+                'clinic',
+                'asset_condition',
+                'clinic_staff_verified',
+                'planning',
+                'bilingual',
+                TRUE,
+                'field_team_whatsapp_sms',
+                'clinic_staff_patients',
+                ARRAY['site', 'campaign', 'probe', 'report', 'alert', 'ticket', 'decision']::TEXT[],
+                ARRAY['gps_photo', 'battery_or_inverter_status', 'clinic_staff_confirmation', 'uptime_reading']::TEXT[],
+                TRUE,
+                TRUE,
+                TRUE,
+                TRUE,
+                30
+            ),
+            (
+                'telecom-probe',
+                'Telecom signal probe rollout',
+                'Telecom probe rollout with signal asset, telemetry-ready workflow, field report task, and approval decision.',
+                'telecom',
+                'connectivity',
+                'telecom_probe_site',
+                'signal_check',
+                'gps_photo_verified',
+                'planning',
+                'bilingual',
+                TRUE,
+                'operator_api_field_team',
+                'operator_network_planning',
+                ARRAY['site', 'campaign', 'probe', 'report', 'alert', 'ticket', 'decision']::TEXT[],
+                ARRAY['gps_photo', 'signal_reading', 'operator_reference', 'local_access_notes']::TEXT[],
+                TRUE,
+                TRUE,
+                TRUE,
+                TRUE,
+                40
+            )
+        ON CONFLICT (id)
+        DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            org_type = EXCLUDED.org_type,
+            sector = EXCLUDED.sector,
+            site_type = EXCLUDED.site_type,
+            form_type = EXCLUDED.form_type,
+            trust_signal = EXCLUDED.trust_signal,
+            default_project_status = EXCLUDED.default_project_status,
+            language_mode = EXCLUDED.language_mode,
+            offline_enabled = EXCLUDED.offline_enabled,
+            channel_strategy = EXCLUDED.channel_strategy,
+            target_segment = EXCLUDED.target_segment,
+            default_actions = EXCLUDED.default_actions,
+            required_evidence = EXCLUDED.required_evidence,
+            creates_asset = EXCLUDED.creates_asset,
+            creates_report_task = EXCLUDED.creates_report_task,
+            creates_alert = EXCLUDED.creates_alert,
+            creates_ticket = EXCLUDED.creates_ticket,
+            active = TRUE,
+            sort_order = EXCLUDED.sort_order,
+            updated_at = NOW()
         "#,
     )
     .execute(pool)

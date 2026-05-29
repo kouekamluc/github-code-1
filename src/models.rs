@@ -907,6 +907,56 @@ pub(crate) struct WorkspaceTemplate {
     pub(crate) sort_order: i32,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct WorkspaceTemplateRequest {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) org_type: String,
+    pub(crate) sector: String,
+    pub(crate) site_type: String,
+    pub(crate) form_type: String,
+    pub(crate) trust_signal: String,
+    pub(crate) default_project_status: Option<String>,
+    pub(crate) language_mode: Option<String>,
+    pub(crate) offline_enabled: Option<bool>,
+    pub(crate) channel_strategy: Option<String>,
+    pub(crate) target_segment: Option<String>,
+    pub(crate) default_actions: Vec<String>,
+    pub(crate) required_evidence: Vec<String>,
+    pub(crate) creates_asset: Option<bool>,
+    pub(crate) creates_report_task: Option<bool>,
+    pub(crate) creates_alert: Option<bool>,
+    pub(crate) creates_ticket: Option<bool>,
+    pub(crate) active: Option<bool>,
+    pub(crate) sort_order: Option<i32>,
+    pub(crate) note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WorkspaceTemplateStatusRequest {
+    pub(crate) active: bool,
+    pub(crate) note: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WorkspaceTemplateReorderRequest {
+    pub(crate) sort_order: i32,
+    pub(crate) note: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+pub(crate) struct WorkspaceTemplateVersion {
+    pub(crate) id: i64,
+    pub(crate) template_id: String,
+    pub(crate) version_number: i32,
+    pub(crate) change_type: String,
+    pub(crate) snapshot: Value,
+    pub(crate) actor: String,
+    pub(crate) note: Option<String>,
+    pub(crate) created_at: String,
+}
+
 #[derive(Serialize)]
 pub(crate) struct ActionResult {
     pub(crate) message: String,

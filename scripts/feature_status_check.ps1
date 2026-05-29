@@ -75,7 +75,64 @@ if ($login.token) { $authHeaders["x-kk-session"] = $login.token }
 Invoke-FeatureApi GET "/api/auth/context" "Authentication" "session context" $null $authHeaders | Out-Null
 
 $templates = Invoke-FeatureApi GET "/api/workspace-templates" "Workspace templates" "backend template registry readable"
-foreach ($template in @($templates)) {
+$templateId = "codex-template-$run"
+$templates = Invoke-FeatureApi POST "/api/workspace-templates" "Admin template management" "create template" @{
+  id = $templateId
+  title = "Codex audit playbook $run"
+  description = "E2E-managed product playbook for admin template controls."
+  org_type = "ngo"
+  sector = "connectivity"
+  site_type = "telecom_probe_site"
+  form_type = "signal_check"
+  trust_signal = "gps_photo_verified"
+  default_project_status = "planning"
+  language_mode = "bilingual"
+  offline_enabled = $true
+  channel_strategy = "field_team_whatsapp_sms"
+  target_segment = "operator_field_team"
+  default_actions = @("site", "campaign", "probe", "decision")
+  required_evidence = @("gps_photo", "signal_reading", "local_focal_point")
+  creates_asset = $true
+  creates_report_task = $false
+  creates_alert = $false
+  creates_ticket = $false
+  active = $true
+  sort_order = 95
+  note = "E2E create template."
+} $authHeaders
+$templates = Invoke-FeatureApi PATCH "/api/workspace-templates/$templateId" "Admin template management" "edit template" @{
+  id = $templateId
+  title = "Codex audit playbook $run updated"
+  description = "E2E-managed product playbook with edited metadata."
+  org_type = "ngo"
+  sector = "connectivity"
+  site_type = "telecom_probe_site"
+  form_type = "signal_check"
+  trust_signal = "gps_photo_verified"
+  default_project_status = "planning"
+  language_mode = "bilingual"
+  offline_enabled = $true
+  channel_strategy = "field_team_whatsapp_sms"
+  target_segment = "operator_field_team"
+  default_actions = @("site", "campaign", "probe", "report", "decision")
+  required_evidence = @("gps_photo", "signal_reading", "local_focal_point")
+  creates_asset = $true
+  creates_report_task = $true
+  creates_alert = $false
+  creates_ticket = $false
+  active = $true
+  sort_order = 95
+  note = "E2E edit template."
+} $authHeaders
+$templates = Invoke-FeatureApi PATCH "/api/workspace-templates/$templateId/reorder" "Admin template management" "reorder template" @{ sort_order = 15; note = "E2E reorder template." } $authHeaders
+$templates = Invoke-FeatureApi PATCH "/api/workspace-templates/$templateId/status" "Admin template management" "deactivate template" @{ active = $false; note = "E2E deactivate template." } $authHeaders
+$templates = Invoke-FeatureApi PATCH "/api/workspace-templates/$templateId/status" "Admin template management" "reactivate template" @{ active = $true; note = "E2E reactivate template." } $authHeaders
+$templateVersions = Invoke-FeatureApi GET "/api/workspace-templates/$templateId/versions" "Admin template management" "read template versions" $null $authHeaders
+if (-not $templateVersions -or @($templateVersions).Count -lt 5) {
+  Add-Result "Admin template management" "version count reflects create/edit/status/reorder" "FAIL" "Expected at least five versions"
+}
+
+foreach ($template in @($templates | Where-Object active -eq $true)) {
   Invoke-FeatureApi POST "/api/workspace-templates/apply" "Workspace templates" "apply $($template.id)" @{
     template_id = $template.id
     region = "Littoral"
@@ -289,6 +346,7 @@ if (Require-Record $project "project" "Archive governance" "archive project") {
 if (Require-Record $imeiEvent "IMEI event" "Archive governance" "archive IMEI event") {
   Invoke-FeatureApi PATCH "/api/entities/operator_imei_event/$($imeiEvent.id)/archive" "Archive governance" "archive IMEI event" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
 }
+Invoke-FeatureApi PATCH "/api/entities/workspace_template/$templateId/archive" "Archive governance" "archive managed template" @{ reason = "E2E archive governance check." } $authHeaders | Out-Null
 Invoke-FeatureApi GET "/api/audit-events?entity_type=project&entity_id=$($project.id)&limit=5" "Archive governance" "archive audit event readable" $null $authHeaders | Out-Null
 
 $results | Format-Table -AutoSize

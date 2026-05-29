@@ -149,6 +149,71 @@ async fn record_exists(
         .map(|row| row.0)
 }
 
+async fn record_template_version(
+    pool: &PgPool,
+    template_id: &str,
+    change_type: &str,
+    actor: &str,
+    note: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let snapshot = sqlx::query_as::<_, (serde_json::Value,)>(
+        "SELECT to_jsonb(t) FROM workspace_templates t WHERE id = $1",
+    )
+    .bind(template_id)
+    .fetch_one(pool)
+    .await?
+    .0;
+    let version_number = sqlx::query_as::<_, (i32,)>(
+        "SELECT COALESCE(MAX(version_number), 0) + 1 FROM workspace_template_versions WHERE template_id = $1",
+    )
+    .bind(template_id)
+    .fetch_one(pool)
+    .await?
+    .0;
+    sqlx::query(
+        r#"
+        INSERT INTO workspace_template_versions (
+            template_id, version_number, change_type, snapshot, actor, note
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(template_id)
+    .bind(version_number)
+    .bind(change_type)
+    .bind(snapshot)
+    .bind(actor)
+    .bind(note)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn clean_template_list(values: &[String], fallback: &[&str]) -> Vec<String> {
+    let cleaned = values
+        .iter()
+        .map(|value| value.trim().to_lowercase().replace(' ', "_"))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if cleaned.is_empty() {
+        fallback.iter().map(|value| (*value).into()).collect()
+    } else {
+        cleaned
+    }
+}
+
+fn validate_template_id(id: &str) -> Option<String> {
+    let normalized = id.trim().to_lowercase();
+    let valid = (3..=80).contains(&normalized.len())
+        && normalized
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'));
+    valid.then_some(normalized)
+}
+
+fn clean_template_text(value: &str) -> String {
+    value.trim().chars().take(500).collect::<String>()
+}
+
 async fn area_from_request(
     pool: &PgPool,
     region: &str,
@@ -940,6 +1005,18 @@ pub(crate) async fn archive_entity(
     }
 
     if entity_type == "workspace_template" {
+        if let Err(err) = record_template_version(
+            pool.get_ref(),
+            &raw_id,
+            "archived",
+            &context.actor,
+            Some(reason),
+        )
+        .await
+        {
+            eprintln!("Failed to version template archive action: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
         if let Err(err) = record_custom_audit_event(
             pool.get_ref(),
             entity_type,
@@ -1176,6 +1253,453 @@ pub(crate) async fn list_workspace_templates(pool: web::Data<PgPool>) -> impl Re
         Ok(templates) => HttpResponse::Ok().json(templates),
         Err(err) => {
             eprintln!("Failed to query workspace templates: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[post("/api/workspace-templates")]
+pub(crate) async fn create_workspace_template(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    payload: web::Json<WorkspaceTemplateRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let Some(template_id) = validate_template_id(&payload.id) else {
+        return HttpResponse::BadRequest().json(ApiError {
+            message:
+                "Template id must be 3-80 lowercase letters, numbers, hyphens, or underscores."
+                    .into(),
+        });
+    };
+    if payload.title.trim().is_empty()
+        || payload.description.trim().is_empty()
+        || payload.org_type.trim().is_empty()
+        || payload.sector.trim().is_empty()
+    {
+        return HttpResponse::BadRequest().json(ApiError {
+            message: "Template title, description, org type, and sector are required.".into(),
+        });
+    }
+
+    let default_actions =
+        clean_template_list(&payload.default_actions, &["site", "campaign", "decision"]);
+    let required_evidence = clean_template_list(
+        &payload.required_evidence,
+        &["gps_photo", "local_focal_point"],
+    );
+    let result = sqlx::query(
+        r#"
+        INSERT INTO workspace_templates (
+            id, title, description, org_type, sector, site_type, form_type,
+            trust_signal, default_project_status, language_mode, offline_enabled,
+            channel_strategy, target_segment, default_actions, required_evidence,
+            creates_asset, creates_report_task, creates_alert, creates_ticket,
+            active, sort_order, updated_at, archived_at, archived_by, archive_reason
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+            $16, $17, $18, $19, $20, $21, NOW(), NULL, NULL, NULL
+        )
+        "#,
+    )
+    .bind(&template_id)
+    .bind(clean_template_text(&payload.title))
+    .bind(clean_template_text(&payload.description))
+    .bind(clean_template_text(&payload.org_type))
+    .bind(clean_template_text(&payload.sector))
+    .bind(clean_template_text(&payload.site_type))
+    .bind(clean_template_text(&payload.form_type))
+    .bind(clean_template_text(&payload.trust_signal))
+    .bind(
+        payload
+            .default_project_status
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "planning".into()),
+    )
+    .bind(
+        payload
+            .language_mode
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "bilingual".into()),
+    )
+    .bind(payload.offline_enabled.unwrap_or(true))
+    .bind(
+        payload
+            .channel_strategy
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "field_team_whatsapp_sms".into()),
+    )
+    .bind(
+        payload
+            .target_segment
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "council_ngo_operator".into()),
+    )
+    .bind(default_actions)
+    .bind(required_evidence)
+    .bind(payload.creates_asset.unwrap_or(false))
+    .bind(payload.creates_report_task.unwrap_or(false))
+    .bind(payload.creates_alert.unwrap_or(false))
+    .bind(payload.creates_ticket.unwrap_or(false))
+    .bind(payload.active.unwrap_or(true))
+    .bind(payload.sort_order.unwrap_or(100))
+    .execute(pool.get_ref())
+    .await;
+
+    if let Err(err) = result {
+        eprintln!("Failed to create workspace template: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    if let Err(err) = record_template_version(
+        pool.get_ref(),
+        &template_id,
+        "created",
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to version workspace template create: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    if let Err(err) = record_custom_audit_event(
+        pool.get_ref(),
+        "workspace_template",
+        0,
+        "template_management",
+        None,
+        Some(&format!("created:{template_id}")),
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to audit workspace template create: {}", err);
+    }
+    match fetch_workspace_templates(pool.get_ref()).await {
+        Ok(templates) => HttpResponse::Ok().json(templates),
+        Err(err) => {
+            eprintln!("Failed to query workspace templates after create: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[patch("/api/workspace-templates/{id}")]
+pub(crate) async fn update_workspace_template(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<String>,
+    payload: web::Json<WorkspaceTemplateRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let template_id = path.into_inner();
+    if fetch_workspace_templates(pool.get_ref())
+        .await
+        .ok()
+        .and_then(|rows| rows.into_iter().find(|template| template.id == template_id))
+        .is_none()
+    {
+        return HttpResponse::NotFound().json(ApiError {
+            message: "Workspace template not found.".into(),
+        });
+    }
+    let default_actions =
+        clean_template_list(&payload.default_actions, &["site", "campaign", "decision"]);
+    let required_evidence = clean_template_list(
+        &payload.required_evidence,
+        &["gps_photo", "local_focal_point"],
+    );
+    let result = sqlx::query(
+        r#"
+        UPDATE workspace_templates
+        SET title = $2,
+            description = $3,
+            org_type = $4,
+            sector = $5,
+            site_type = $6,
+            form_type = $7,
+            trust_signal = $8,
+            default_project_status = $9,
+            language_mode = $10,
+            offline_enabled = $11,
+            channel_strategy = $12,
+            target_segment = $13,
+            default_actions = $14,
+            required_evidence = $15,
+            creates_asset = $16,
+            creates_report_task = $17,
+            creates_alert = $18,
+            creates_ticket = $19,
+            active = $20,
+            sort_order = $21,
+            updated_at = NOW()
+        WHERE id = $1 AND archived_at IS NULL
+        "#,
+    )
+    .bind(&template_id)
+    .bind(clean_template_text(&payload.title))
+    .bind(clean_template_text(&payload.description))
+    .bind(clean_template_text(&payload.org_type))
+    .bind(clean_template_text(&payload.sector))
+    .bind(clean_template_text(&payload.site_type))
+    .bind(clean_template_text(&payload.form_type))
+    .bind(clean_template_text(&payload.trust_signal))
+    .bind(
+        payload
+            .default_project_status
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "planning".into()),
+    )
+    .bind(
+        payload
+            .language_mode
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "bilingual".into()),
+    )
+    .bind(payload.offline_enabled.unwrap_or(true))
+    .bind(
+        payload
+            .channel_strategy
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "field_team_whatsapp_sms".into()),
+    )
+    .bind(
+        payload
+            .target_segment
+            .as_deref()
+            .map(clean_template_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "council_ngo_operator".into()),
+    )
+    .bind(default_actions)
+    .bind(required_evidence)
+    .bind(payload.creates_asset.unwrap_or(false))
+    .bind(payload.creates_report_task.unwrap_or(false))
+    .bind(payload.creates_alert.unwrap_or(false))
+    .bind(payload.creates_ticket.unwrap_or(false))
+    .bind(payload.active.unwrap_or(true))
+    .bind(payload.sort_order.unwrap_or(100))
+    .execute(pool.get_ref())
+    .await;
+
+    match result {
+        Ok(done) if done.rows_affected() > 0 => {}
+        Ok(_) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Workspace template not found.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to update workspace template: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+    if let Err(err) = record_template_version(
+        pool.get_ref(),
+        &template_id,
+        "updated",
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to version workspace template update: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    if let Err(err) = record_custom_audit_event(
+        pool.get_ref(),
+        "workspace_template",
+        0,
+        "template_management",
+        None,
+        Some(&format!("updated:{template_id}")),
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to audit workspace template update: {}", err);
+    }
+    match fetch_workspace_templates(pool.get_ref()).await {
+        Ok(templates) => HttpResponse::Ok().json(templates),
+        Err(err) => {
+            eprintln!("Failed to query workspace templates after update: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[patch("/api/workspace-templates/{id}/status")]
+pub(crate) async fn update_workspace_template_status(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<String>,
+    payload: web::Json<WorkspaceTemplateStatusRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let template_id = path.into_inner();
+    let result = sqlx::query(
+        "UPDATE workspace_templates SET active = $2, updated_at = NOW() WHERE id = $1 AND archived_at IS NULL",
+    )
+    .bind(&template_id)
+    .bind(payload.active)
+    .execute(pool.get_ref())
+    .await;
+    match result {
+        Ok(done) if done.rows_affected() > 0 => {}
+        Ok(_) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Workspace template not found.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to update workspace template status: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+    let change_type = if payload.active {
+        "activated"
+    } else {
+        "deactivated"
+    };
+    if let Err(err) = record_template_version(
+        pool.get_ref(),
+        &template_id,
+        change_type,
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to version workspace template status: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    if let Err(err) = record_custom_audit_event(
+        pool.get_ref(),
+        "workspace_template",
+        0,
+        "template_management",
+        None,
+        Some(&format!("{change_type}:{template_id}")),
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to audit workspace template status: {}", err);
+    }
+    match fetch_workspace_templates(pool.get_ref()).await {
+        Ok(templates) => HttpResponse::Ok().json(templates),
+        Err(err) => {
+            eprintln!("Failed to query workspace templates after status: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[patch("/api/workspace-templates/{id}/reorder")]
+pub(crate) async fn reorder_workspace_template(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<String>,
+    payload: web::Json<WorkspaceTemplateReorderRequest>,
+) -> impl Responder {
+    let context = match require_permission(pool.get_ref(), &request, "workspace:manage").await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let template_id = path.into_inner();
+    let result = sqlx::query(
+        "UPDATE workspace_templates SET sort_order = $2, updated_at = NOW() WHERE id = $1 AND archived_at IS NULL",
+    )
+    .bind(&template_id)
+    .bind(payload.sort_order)
+    .execute(pool.get_ref())
+    .await;
+    match result {
+        Ok(done) if done.rows_affected() > 0 => {}
+        Ok(_) => {
+            return HttpResponse::NotFound().json(ApiError {
+                message: "Workspace template not found.".into(),
+            })
+        }
+        Err(err) => {
+            eprintln!("Failed to reorder workspace template: {}", err);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+    if let Err(err) = record_template_version(
+        pool.get_ref(),
+        &template_id,
+        "reordered",
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to version workspace template reorder: {}", err);
+        return HttpResponse::InternalServerError().finish();
+    }
+    if let Err(err) = record_custom_audit_event(
+        pool.get_ref(),
+        "workspace_template",
+        0,
+        "template_management",
+        None,
+        Some(&format!("reordered:{template_id}")),
+        &context.actor,
+        payload.note.as_deref(),
+    )
+    .await
+    {
+        eprintln!("Failed to audit workspace template reorder: {}", err);
+    }
+    match fetch_workspace_templates(pool.get_ref()).await {
+        Ok(templates) => HttpResponse::Ok().json(templates),
+        Err(err) => {
+            eprintln!("Failed to query workspace templates after reorder: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+#[get("/api/workspace-templates/{id}/versions")]
+pub(crate) async fn list_workspace_template_versions(
+    request: HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Err(response) = require_permission(pool.get_ref(), &request, "audit:read").await {
+        return response;
+    }
+    match fetch_workspace_template_versions(pool.get_ref(), &path.into_inner()).await {
+        Ok(versions) => HttpResponse::Ok().json(versions),
+        Err(err) => {
+            eprintln!("Failed to query workspace template versions: {}", err);
             HttpResponse::InternalServerError().finish()
         }
     }

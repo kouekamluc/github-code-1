@@ -381,7 +381,7 @@ pub(crate) async fn fetch_workspace_templates(
             active,
             sort_order
         FROM workspace_templates
-        WHERE active = TRUE AND archived_at IS NULL
+        WHERE archived_at IS NULL
         ORDER BY sort_order ASC, title ASC
         "#,
     )
@@ -423,6 +423,31 @@ pub(crate) async fn fetch_workspace_template(
     )
     .bind(template_id)
     .fetch_optional(pool)
+    .await
+}
+
+pub(crate) async fn fetch_workspace_template_versions(
+    pool: &PgPool,
+    template_id: &str,
+) -> Result<Vec<WorkspaceTemplateVersion>, sqlx::Error> {
+    sqlx::query_as::<_, WorkspaceTemplateVersion>(
+        r#"
+        SELECT
+            id,
+            template_id,
+            version_number,
+            change_type,
+            snapshot,
+            actor,
+            note,
+            created_at::TEXT AS created_at
+        FROM workspace_template_versions
+        WHERE template_id = $1
+        ORDER BY version_number DESC
+        "#,
+    )
+    .bind(template_id)
+    .fetch_all(pool)
     .await
 }
 

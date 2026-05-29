@@ -493,6 +493,52 @@
     color: var(--muted);
   }
 
+  .template-card.is-inactive {
+    background: #f8fafc;
+    border-style: dashed;
+    opacity: 0.78;
+  }
+
+  .template-card-header {
+    @apply flex items-start justify-between gap-2;
+  }
+
+  .template-admin-panel {
+    @apply grid gap-4 rounded-lg border p-4;
+    background: #f8fafc;
+    border-color: var(--line-soft);
+    grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  }
+
+  .template-admin-form,
+  .template-version-panel {
+    @apply rounded-lg border p-4;
+    background: #ffffff;
+    border-color: var(--line-soft);
+  }
+
+  .template-toggle-row {
+    @apply grid gap-2;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .template-version-item {
+    @apply grid gap-2 rounded-lg border p-3;
+    background: #ffffff;
+    border-color: var(--line-soft);
+  }
+
+  .template-version-item span,
+  .template-version-item small {
+    @apply block text-xs leading-5;
+    color: var(--muted);
+  }
+
+  .template-version-item strong {
+    @apply block text-sm font-black leading-5;
+    color: var(--ink);
+  }
+
   .matrix-action-lab {
     @apply mb-4 grid items-center gap-3 rounded-lg border p-4;
     background: var(--surface);
@@ -1294,6 +1340,7 @@
     .decision-stage-grid,
     .execution-stage-grid,
     .editor-grid,
+    .template-admin-panel,
     .workspace-grid,
     .area-dossier-grid,
     .matrix-toolbar,
@@ -1335,7 +1382,8 @@
     .market-strip,
     .filter-grid,
     .profile-grid-inner,
-    .insight-grid {
+    .insight-grid,
+    .template-toggle-row {
       grid-template-columns: 1fr;
     }
 

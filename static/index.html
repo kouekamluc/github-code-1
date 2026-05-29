@@ -222,6 +222,60 @@
             </div>
           </div>
           <div id="workspace-templates" class="template-grid"></div>
+          <div class="template-admin-panel mt-4">
+            <form id="template-form" class="template-admin-form" novalidate>
+              <div class="surface-header mb-0">
+                <div>
+                  <p class="eyebrow">Admin playbooks</p>
+                  <h2 id="template-form-title">Create template</h2>
+                </div>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="template-form-reset"><i data-lucide="rotate-ccw"></i> Reset</button>
+              </div>
+              <div class="row mt-3">
+                <input class="form-control" id="templateId" placeholder="template-id" required />
+                <input class="form-control" id="templateTitle" placeholder="Template title" required />
+              </div>
+              <textarea class="form-control mt-3" id="templateDescription" placeholder="What this playbook creates and proves" required></textarea>
+              <div class="row mt-3">
+                <input class="form-control" id="templateOrgType" placeholder="org_type" required />
+                <input class="form-control" id="templateSector" placeholder="sector" required />
+                <input class="form-control" id="templateSiteType" placeholder="site_type" required />
+                <input class="form-control" id="templateFormType" placeholder="form_type" required />
+                <input class="form-control" id="templateTrustSignal" placeholder="trust_signal" required />
+                <input type="number" class="form-control" id="templateSortOrder" placeholder="Sort order" value="100" />
+              </div>
+              <div class="row mt-3">
+                <input class="form-control" id="templateActions" placeholder="Actions: site, campaign, decision" />
+                <input class="form-control" id="templateEvidence" placeholder="Evidence: gps_photo, local_focal_point" />
+                <input class="form-control" id="templateProjectStatus" placeholder="Default project status" value="planning" />
+                <input class="form-control" id="templateLanguageMode" placeholder="Language mode" value="bilingual" />
+                <input class="form-control" id="templateChannelStrategy" placeholder="Channel strategy" value="field_team_whatsapp_sms" />
+                <input class="form-control" id="templateTargetSegment" placeholder="Target segment" value="council_ngo_operator" />
+              </div>
+              <div class="template-toggle-row mt-3">
+                <label class="checkbox-row"><input type="checkbox" id="templateOffline" checked /> Offline</label>
+                <label class="checkbox-row"><input type="checkbox" id="templateCreatesAsset" /> Asset</label>
+                <label class="checkbox-row"><input type="checkbox" id="templateCreatesReport" /> Report</label>
+                <label class="checkbox-row"><input type="checkbox" id="templateCreatesAlert" /> Alert</label>
+                <label class="checkbox-row"><input type="checkbox" id="templateCreatesTicket" /> Ticket</label>
+                <label class="checkbox-row"><input type="checkbox" id="templateActive" checked /> Active</label>
+              </div>
+              <input class="form-control mt-3" id="templateNote" placeholder="Change note for version history" />
+              <button class="btn btn-primary w-100 mt-3"><i data-lucide="save"></i> Save template</button>
+              <div id="template-status" class="mt-3"></div>
+            </form>
+            <div class="template-version-panel">
+              <div class="surface-header mb-0">
+                <div>
+                  <p class="eyebrow">Version history</p>
+                  <h2 id="template-version-title">Select a template</h2>
+                </div>
+              </div>
+              <div id="template-version-list" class="list-stack mt-3">
+                <div class="empty-state">Use Versions on any playbook to inspect the backend snapshots.</div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section class="surface mb-4">

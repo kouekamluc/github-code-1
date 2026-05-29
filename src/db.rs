@@ -154,6 +154,22 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )
         "#,
         r#"
+        CREATE SEQUENCE IF NOT EXISTS workspace_template_versions_id_seq
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS workspace_template_versions (
+            id BIGINT PRIMARY KEY DEFAULT nextval('workspace_template_versions_id_seq'::regclass),
+            template_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            change_type TEXT NOT NULL,
+            snapshot JSONB NOT NULL,
+            actor TEXT NOT NULL DEFAULT 'system',
+            note TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(template_id, version_number)
+        )
+        "#,
+        r#"
         CREATE TABLE IF NOT EXISTS decision_snapshots (
             id BIGSERIAL PRIMARY KEY,
             project_id BIGINT REFERENCES projects(id) ON DELETE SET NULL,
@@ -485,6 +501,15 @@ pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         r#"
         CREATE INDEX IF NOT EXISTS evidence_files_entity_idx
         ON evidence_files(entity_type, entity_id, created_at DESC)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS workspace_template_versions_template_idx
+        ON workspace_template_versions(template_id, version_number DESC)
         "#,
     )
     .execute(pool)

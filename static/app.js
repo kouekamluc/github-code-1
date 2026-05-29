@@ -1207,13 +1207,22 @@ function renderWorkspaces() {
   const templatesTarget = document.getElementById('workspace-templates');
   if (templatesTarget) {
     templatesTarget.innerHTML = workspaceTemplates.length ? workspaceTemplates.map(template => `
-      <article class="template-card">
-        <span>${escapeHtml(template.org_type.replaceAll('_', ' '))}</span>
+      <article class="template-card ${template.active ? '' : 'is-inactive'}">
+        <div class="template-card-header">
+          <span>${escapeHtml(template.org_type.replaceAll('_', ' '))}</span>
+          <span class="status-pill">${template.active ? 'active' : 'inactive'}</span>
+        </div>
         <strong>${escapeHtml(template.title)}</strong>
         <small>${escapeHtml(template.description)}</small>
+        <small>Order ${template.sort_order} &middot; ${escapeHtml((template.default_actions || []).join(' / '))}</small>
         <small>${escapeHtml((template.required_evidence || []).join(' / '))}</small>
         <div class="ticket-actions">
-          <button class="btn btn-sm btn-success workspace-template" data-template="${escapeHtml(template.id)}">Apply</button>
+          <button class="btn btn-sm btn-success workspace-template" data-template="${escapeHtml(template.id)}" ${template.active ? '' : 'disabled'}><i data-lucide="rocket"></i> Apply</button>
+          <button class="btn btn-sm btn-outline-secondary workspace-template-edit" data-template="${escapeHtml(template.id)}"><i data-lucide="square-pen"></i> Edit</button>
+          <button class="btn btn-sm btn-outline-secondary workspace-template-version" data-template="${escapeHtml(template.id)}"><i data-lucide="history"></i> Versions</button>
+          <button class="btn btn-sm btn-outline-secondary workspace-template-reorder" data-template="${escapeHtml(template.id)}" data-order="${Number(template.sort_order || 100) - 10}"><i data-lucide="arrow-up"></i></button>
+          <button class="btn btn-sm btn-outline-secondary workspace-template-reorder" data-template="${escapeHtml(template.id)}" data-order="${Number(template.sort_order || 100) + 10}"><i data-lucide="arrow-down"></i></button>
+          <button class="btn btn-sm btn-outline-secondary workspace-template-status" data-template="${escapeHtml(template.id)}" data-active="${template.active ? 'false' : 'true'}">${template.active ? 'Deactivate' : 'Activate'}</button>
           <button class="btn btn-sm btn-outline-secondary workspace-template-archive" data-template="${escapeHtml(template.id)}">Archive</button>
         </div>
       </article>
@@ -1449,6 +1458,18 @@ function renderWorkspaces() {
 
   document.querySelectorAll('.workspace-template').forEach(button => {
     button.addEventListener('click', () => applyWorkspaceTemplate(button.dataset.template));
+  });
+  document.querySelectorAll('.workspace-template-edit').forEach(button => {
+    button.addEventListener('click', () => populateTemplateForm(button.dataset.template));
+  });
+  document.querySelectorAll('.workspace-template-version').forEach(button => {
+    button.addEventListener('click', () => loadTemplateVersions(button.dataset.template));
+  });
+  document.querySelectorAll('.workspace-template-status').forEach(button => {
+    button.addEventListener('click', () => updateWorkspaceTemplateStatus(button.dataset.template, button.dataset.active === 'true'));
+  });
+  document.querySelectorAll('.workspace-template-reorder').forEach(button => {
+    button.addEventListener('click', () => reorderWorkspaceTemplate(button.dataset.template, Number(button.dataset.order)));
   });
   document.querySelectorAll('.workspace-template-archive').forEach(button => {
     button.addEventListener('click', async () => {
@@ -2675,6 +2696,177 @@ function prepareProjectAction(action, project) {
   }
 }
 
+function splitTemplateList(value) {
+  return String(value || '')
+    .split(',')
+    .map(item => item.trim().toLowerCase().replace(/\s+/g, '_'))
+    .filter(Boolean);
+}
+
+function templateFormPayload() {
+  return {
+    id: document.getElementById('templateId').value.trim().toLowerCase(),
+    title: document.getElementById('templateTitle').value.trim(),
+    description: document.getElementById('templateDescription').value.trim(),
+    org_type: document.getElementById('templateOrgType').value.trim(),
+    sector: document.getElementById('templateSector').value.trim(),
+    site_type: document.getElementById('templateSiteType').value.trim(),
+    form_type: document.getElementById('templateFormType').value.trim(),
+    trust_signal: document.getElementById('templateTrustSignal').value.trim(),
+    default_project_status: document.getElementById('templateProjectStatus').value.trim() || 'planning',
+    language_mode: document.getElementById('templateLanguageMode').value.trim() || 'bilingual',
+    offline_enabled: document.getElementById('templateOffline').checked,
+    channel_strategy: document.getElementById('templateChannelStrategy').value.trim() || 'field_team_whatsapp_sms',
+    target_segment: document.getElementById('templateTargetSegment').value.trim() || 'council_ngo_operator',
+    default_actions: splitTemplateList(document.getElementById('templateActions').value),
+    required_evidence: splitTemplateList(document.getElementById('templateEvidence').value),
+    creates_asset: document.getElementById('templateCreatesAsset').checked,
+    creates_report_task: document.getElementById('templateCreatesReport').checked,
+    creates_alert: document.getElementById('templateCreatesAlert').checked,
+    creates_ticket: document.getElementById('templateCreatesTicket').checked,
+    active: document.getElementById('templateActive').checked,
+    sort_order: Number(document.getElementById('templateSortOrder').value || 100),
+    note: document.getElementById('templateNote').value.trim() || null,
+  };
+}
+
+function resetTemplateForm() {
+  const form = document.getElementById('template-form');
+  if (!form) return;
+  form.dataset.mode = 'create';
+  form.dataset.templateId = '';
+  form.reset();
+  document.getElementById('templateId').disabled = false;
+  document.getElementById('templateSortOrder').value = '100';
+  document.getElementById('templateProjectStatus').value = 'planning';
+  document.getElementById('templateLanguageMode').value = 'bilingual';
+  document.getElementById('templateChannelStrategy').value = 'field_team_whatsapp_sms';
+  document.getElementById('templateTargetSegment').value = 'council_ngo_operator';
+  document.getElementById('templateOffline').checked = true;
+  document.getElementById('templateActive').checked = true;
+  document.getElementById('template-form-title').textContent = 'Create template';
+}
+
+function populateTemplateForm(templateId) {
+  const template = workspaceTemplates.find(item => item.id === templateId);
+  const form = document.getElementById('template-form');
+  if (!template || !form) return;
+  form.dataset.mode = 'edit';
+  form.dataset.templateId = template.id;
+  document.getElementById('templateId').value = template.id;
+  document.getElementById('templateId').disabled = true;
+  document.getElementById('templateTitle').value = template.title || '';
+  document.getElementById('templateDescription').value = template.description || '';
+  document.getElementById('templateOrgType').value = template.org_type || '';
+  document.getElementById('templateSector').value = template.sector || '';
+  document.getElementById('templateSiteType').value = template.site_type || '';
+  document.getElementById('templateFormType').value = template.form_type || '';
+  document.getElementById('templateTrustSignal').value = template.trust_signal || '';
+  document.getElementById('templateProjectStatus').value = template.default_project_status || 'planning';
+  document.getElementById('templateLanguageMode').value = template.language_mode || 'bilingual';
+  document.getElementById('templateOffline').checked = Boolean(template.offline_enabled);
+  document.getElementById('templateChannelStrategy').value = template.channel_strategy || 'field_team_whatsapp_sms';
+  document.getElementById('templateTargetSegment').value = template.target_segment || 'council_ngo_operator';
+  document.getElementById('templateActions').value = (template.default_actions || []).join(', ');
+  document.getElementById('templateEvidence').value = (template.required_evidence || []).join(', ');
+  document.getElementById('templateCreatesAsset').checked = Boolean(template.creates_asset);
+  document.getElementById('templateCreatesReport').checked = Boolean(template.creates_report_task);
+  document.getElementById('templateCreatesAlert').checked = Boolean(template.creates_alert);
+  document.getElementById('templateCreatesTicket').checked = Boolean(template.creates_ticket);
+  document.getElementById('templateActive').checked = Boolean(template.active);
+  document.getElementById('templateSortOrder').value = template.sort_order || 100;
+  document.getElementById('templateNote').value = '';
+  document.getElementById('template-form-title').textContent = `Edit ${template.title}`;
+  document.getElementById('templateTitle').focus();
+}
+
+async function saveWorkspaceTemplate(event) {
+  event.preventDefault();
+  if (!authSession?.token) {
+    switchView('login');
+    setStatus(document.getElementById('login-status'), 'Sign in to manage workspace templates.', 'info');
+    return;
+  }
+  const form = document.getElementById('template-form');
+  const payload = templateFormPayload();
+  const editingId = form.dataset.mode === 'edit' ? form.dataset.templateId : null;
+  const path = editingId ? `/api/workspace-templates/${encodeURIComponent(editingId)}` : '/api/workspace-templates';
+  const method = editingId ? 'PATCH' : 'POST';
+  try {
+    workspaceTemplates = await fetchJson(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    renderWorkspaces();
+    resetTemplateForm();
+    setStatus(document.getElementById('template-status'), `Template ${editingId ? 'updated' : 'created'} and versioned.`, 'success');
+    if (window.htmx) htmx.trigger('#workspace-activity', 'refresh');
+  } catch (error) {
+    setStatus(document.getElementById('template-status'), error.message, 'danger');
+  }
+}
+
+async function updateWorkspaceTemplateStatus(templateId, active) {
+  if (!authSession?.token) {
+    switchView('login');
+    setStatus(document.getElementById('login-status'), 'Sign in to change template status.', 'info');
+    return;
+  }
+  try {
+    workspaceTemplates = await fetchJson(`/api/workspace-templates/${encodeURIComponent(templateId)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active, note: active ? 'Reactivated from admin playbook UI.' : 'Deactivated from admin playbook UI.' }),
+    });
+    renderWorkspaces();
+    setStatus(document.getElementById('template-status'), `Template ${active ? 'activated' : 'deactivated'} and versioned.`, 'success');
+  } catch (error) {
+    setStatus(document.getElementById('template-status'), error.message, 'danger');
+  }
+}
+
+async function reorderWorkspaceTemplate(templateId, sortOrder) {
+  if (!authSession?.token) {
+    switchView('login');
+    setStatus(document.getElementById('login-status'), 'Sign in to reorder templates.', 'info');
+    return;
+  }
+  try {
+    workspaceTemplates = await fetchJson(`/api/workspace-templates/${encodeURIComponent(templateId)}/reorder`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sort_order: sortOrder, note: `Moved to sort order ${sortOrder}.` }),
+    });
+    renderWorkspaces();
+    setStatus(document.getElementById('template-status'), 'Template order updated and versioned.', 'success');
+  } catch (error) {
+    setStatus(document.getElementById('template-status'), error.message, 'danger');
+  }
+}
+
+async function loadTemplateVersions(templateId) {
+  const target = document.getElementById('template-version-list');
+  const title = document.getElementById('template-version-title');
+  const template = workspaceTemplates.find(item => item.id === templateId);
+  if (!target || !title) return;
+  title.textContent = template ? template.title : templateId;
+  target.innerHTML = '<div class="empty-state">Loading versions...</div>';
+  try {
+    const versions = await fetchJson(`/api/workspace-templates/${encodeURIComponent(templateId)}/versions`);
+    target.innerHTML = versions.length ? versions.map(version => `
+      <article class="template-version-item">
+        <strong>v${version.version_number} &middot; ${escapeHtml(labelize(version.change_type))}</strong>
+        <span>${escapeHtml(shortDate(version.created_at))} &middot; ${escapeHtml(version.actor || 'system')}</span>
+        <small>${escapeHtml(version.note || 'No change note')}</small>
+      </article>
+    `).join('') : '<div class="empty-state">No versions recorded yet.</div>';
+  } catch (error) {
+    setStatus(document.getElementById('template-status'), error.message, 'danger');
+    target.innerHTML = '<div class="empty-state">Could not load version history.</div>';
+  }
+}
+
 function applyWorkspaceTemplate(templateId) {
   const template = workspaceTemplates.find(item => item.id === templateId);
   if (!template) return;
@@ -3224,6 +3416,9 @@ document.getElementById('campaign-form').addEventListener('submit', async event 
     setStatus(document.getElementById('campaign-status'), error.message, 'danger');
   }
 });
+
+document.getElementById('template-form')?.addEventListener('submit', saveWorkspaceTemplate);
+document.getElementById('template-form-reset')?.addEventListener('click', resetTemplateForm);
 
 document.getElementById('decision-snapshot-form').addEventListener('submit', async event => {
   event.preventDefault();
